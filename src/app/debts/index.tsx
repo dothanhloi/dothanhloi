@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Empty, Pill, Stats, TopBar } from '../../components/ui';
 import { truckStats } from '../../lib/calc';
 import { fmtKg, fmtMoney } from '../../lib/format';
-import { useStore } from '../../lib/store';
+import { canSeeMoney, useStore } from '../../lib/store';
 import { C, shadow } from '../../lib/theme';
 
 export interface SellerDebt { sellerId: string; name: string; trucks: number; open: number; kg: number; amount: number; paid: number; remaining: number }
@@ -34,6 +34,7 @@ export default function Debts() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const store = useStore();
+  const money = canSeeMoney(store);
   const trucks = store.trucks;
   const sellers = store.sellers;
   const [onlyOpen, setOnlyOpen] = useState(true);
@@ -41,6 +42,14 @@ export default function Debts() {
   const list = onlyOpen ? debts.filter((d) => d.remaining > 0.5) : debts;
   const total = debts.reduce((a, d) => ({ amount: a.amount + d.amount, paid: a.paid + d.paid, remaining: a.remaining + d.remaining }), { amount: 0, paid: 0, remaining: 0 });
 
+  if (!money) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <TopBar title="Công nợ" onBack={() => router.back()} />
+        <Empty icon="lock-closed-outline" text="Quản lý đã ẩn thông tin tiền với nhân viên" />
+      </View>
+    );
+  }
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <TopBar title="Công nợ" onBack={() => router.back()} />

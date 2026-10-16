@@ -95,7 +95,13 @@ export function applyRule(rule: DeductRule, measured: number | null, gross: numb
   }
 }
 
-export function truckStats(t: Truck): TruckStats {
+/** Tổng bao và tổng thô theo kiểu cân (từng bao hoặc cân xe tải) */
+export function grossOf(t: Truck): { bags: number; gross: number } {
+  if ((t.weighMode || 'bags') === 'truck') {
+    const w = t.truckWeigh || { grossIn: null, tareOut: null, bags: null };
+    const gross = w.grossIn != null && w.tareOut != null ? Math.max(0, Number(w.grossIn) - Number(w.tareOut)) : 0;
+    return { bags: Number(w.bags) || 0, gross };
+  }
   let bags = 0;
   let gross = 0;
   for (const tb of t.tables) {
@@ -103,6 +109,11 @@ export function truckStats(t: Truck): TruckStats {
     bags += s.bags;
     gross += s.total;
   }
+  return { bags, gross };
+}
+
+export function truckStats(t: Truck): TruckStats {
+  const { bags, gross } = grossOf(t);
   const avg = bags ? gross / bags : 0;
   const p = presetOf(t);
   const sample = t.sample || { gram: null, impurityGram: null, impurityPct: null, moisture: null };

@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastHost } from '../components/ui';
 import { selectCurrentUser, useStore } from '../lib/store';
 import { scheduleSync, syncNow } from '../lib/sync';
+import { runAutoBackup } from '../lib/backup';
 import { C } from '../lib/theme';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
@@ -25,9 +26,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!hydrated) return;
     useStore.getState().ensureDefaultPreset();
-    syncNow();
+    useStore.getState().migratePins().finally(() => { syncNow(); runAutoBackup(); });
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets || s.sellers !== prev.sellers || s.dayPrices !== prev.dayPrices) scheduleSync();
+      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets || s.sellers !== prev.sellers || s.dayPrices !== prev.dayPrices || s.warehouses !== prev.warehouses || s.products !== prev.products || s.sales !== prev.sales || s.hedges !== prev.hedges || s.photos !== prev.photos) scheduleSync();
     });
     return unsub;
   }, [hydrated]);

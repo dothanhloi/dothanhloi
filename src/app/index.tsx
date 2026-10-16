@@ -6,7 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Btn, ConfirmSheet, Empty, Field, IconBtn, Input, InputSheet, Pill, Sheet, Stats, TopBar, haptic } from '../components/ui';
 import { dayStats, truckStats } from '../lib/calc';
 import { addDays, fmtDateShort, fmtDateVN, fmtKg, fmtMoney, fmtTime, fmtWeekday, todayStr } from '../lib/format';
-import { activeDrivers, activeSellers, activeUsers, datesWithTrucks, dayPriceOf, driverName, selectCurrentUser, sellerName, useStore, userName } from '../lib/store';
+import { activeDrivers, activeProducts, activeSellers, activeUsers, activeWarehouses, canSeeMoney, datesWithTrucks, dayPriceOf, driverName, selectCurrentUser, sellerName, useStore, userName } from '../lib/store';
+import { reminders } from '../lib/reports';
 import { getSyncStatus, onSyncStatus, SyncStatus, syncNow } from '../lib/sync';
 import { C, shadow } from '../lib/theme';
 import { toast } from '../lib/toast';
@@ -25,6 +26,10 @@ export default function Home() {
   const [logoutAsk, setLogoutAsk] = useState(false);
   const [editPrice, setEditPrice] = useState(false);
   const dayPrice = dayPriceOf(store, date);
+  const money = canSeeMoney(store);
+  const isAdmin = user?.role === 'admin';
+  const [showRem, setShowRem] = useState(false);
+  const rems = useMemo(() => reminders(store), [store]);
   const [sync, setSync] = useState<SyncStatus>(getSyncStatus());
   useEffect(() => onSyncStatus(setSync), []);
 
@@ -46,7 +51,7 @@ export default function Home() {
             <IconBtn name={sync.state === 'error' ? 'cloud-offline-outline' : sync.state === 'syncing' ? 'sync' : sync.state === 'ok' ? 'cloud-done-outline' : 'cloud-outline'}
               color={sync.state === 'error' ? 'red' : sync.state === 'ok' ? 'green' : 'gray'}
               onPress={async () => { const r = await syncNow(); if (r.ok) toast(`Đã đồng bộ: gửi ${r.pushed}, nhận ${r.received}`, 'ok'); else if ('off' in r) router.push('/settings/google'); else if ('error' in r) toast(r.error, 'err', 3500); }} />
-            <IconBtn name="wallet-outline" color="orange" onPress={() => router.push('/debts')} />
+            <IconBtn name="search-outline" color="gray" onPress={() => router.push('/search')} />
             <IconBtn name="settings-outline" color="blue" onPress={() => router.push('/settings')} />
           </>
         }
@@ -71,18 +76,35 @@ export default function Home() {
           </ScrollView>
         ) : null}
 
-        <Pressable onPress={() => setEditPrice(true)} style={({ pressed }) => [st.priceBar, shadow, pressed && { opacity: 0.7 }]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 10 }}>
+          <Pill text="Báo cáo" icon="bar-chart-outline" color="gray" small onPress={() => router.push('/reports')} />
+          {money ? <Pill text="Công nợ" icon="wallet-outline" color="gray" small onPress={() => router.push('/debts')} /> : null}
+          <Pill text="Tồn kho" icon="cube-outline" color="gray" small onPress={() => router.push('/inventory')} />
+          <Pill text="Người bán" icon="person-outline" color="gray" small onPress={() => router.push('/settings/sellers')} />
+          {rems.length ? <Pill text={`Nhắc việc (${rems.length})`} icon="notifications-outline" color="orange" small onPress={() => setShowRem((v) => !v)} /> : null}
+        </ScrollView>
+        {showRem && rems.length ? (
+          <View style={[st.remBox, shadow]}>
+            {rems.map((r, i) => (
+              <Pressable key={i} onPress={() => { if (r.truckId) router.push(`/truck/${r.truckId}`); else if (r.sellerId && money) router.push(`/debts/${r.sellerId}`); }} style={st.remRow}>
+                <Ionicons name={r.kind === 'overdue' ? 'alert-circle' : r.kind === 'unfinished' ? 'time' : r.kind === 'noprice' ? 'pricetag' : 'cube'} size={16} color={r.kind === 'overdue' ? C.red : C.orange} />
+                <Text style={{ flex: 1, fontSize: 13, color: C.text }}>{(!money && r.kind === 'overdue') ? 'Có công nợ quá hạn (hỏi quản lý)' : r.text}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {money ? <Pressable onPress={() => { if (!isAdmin && !money) return; setEditPrice(true); }} style={({ pressed }) => [st.priceBar, shadow, pressed && { opacity: 0.7 }]}>
           <Ionicons name="pricetag-outline" size={18} color={dayPrice?.price != null ? C.green : C.muted} />
           <Text style={{ flex: 1, color: C.muted, fontSize: 13 }}>Giá tham chiếu ngày {fmtDateShort(date)}{dayPrice?.note ? ` · ${dayPrice.note}` : ''}</Text>
           <Text style={[st.priceVal, dayPrice?.price == null && { color: C.blue, fontSize: 14 }]}>{dayPrice?.price != null ? fmtMoney(dayPrice.price) + '/kg' : 'Nhập giá'}</Text>
-        </Pressable>
+        </Pressable> : null}
 
         <Stats items={[
           { icon: 'car-outline', color: C.blue, value: `${ds.done}/${ds.trucks}`, label: 'Xe xong' },
           { icon: 'cube-outline', color: C.blue, value: String(ds.bags), label: 'Tổng bao' },
           { icon: 'scale-outline', color: C.green, value: fmtKg(ds.gross), unit: 'kg', label: 'Tổng thô' },
         ]} />
-        {ds.amount > 0 ? (
+        {money && ds.amount > 0 ? (
           <Stats items={[
             { icon: 'leaf-outline', color: C.green, value: fmtKg(ds.net), unit: 'kg', label: 'Thực nhận' },
             { icon: 'cash-outline', color: C.orange, value: fmtMoney(ds.amount), label: 'Thành tiền' },
@@ -106,7 +128,8 @@ export default function Home() {
                   <Text style={st.truckName}>{t.name}</Text>
                   {done ? <Pill text="Đã xong" color="green" small icon="checkmark-circle" /> : <Pill text="Đang cân" color="orange" small icon="time-outline" />}
                   {t.loaded ? <Pill text="Đã bốc" color="blue" small /> : null}
-                  {t.payment.status === 'paid' ? <Pill text="Đã TT" color="green" small /> : t.payment.status === 'partial' ? <Pill text="TT 1 phần" color="orange" small /> : null}
+                  {money && t.payment.status === 'paid' ? <Pill text="Đã TT" color="green" small /> : money && t.payment.status === 'partial' ? <Pill text="TT 1 phần" color="orange" small /> : null}
+                  {(t.weighMode || 'bags') === 'truck' ? <Pill text="Xe tải" color="gray" small /> : null}
                 </View>
                 <Text style={st.truckSub} numberOfLines={2}>
                   {sellerName(store, t.sellerId) ? `${sellerName(store, t.sellerId)} · ` : ''}{driverName(store, t.driverId) ? `TX ${driverName(store, t.driverId)} · ` : ''}
@@ -149,6 +172,11 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
   const [sellerId, setSellerId] = useState<string | null>(null);
   const [newSeller, setNewSeller] = useState('');
   const [sellerQ, setSellerQ] = useState('');
+  const products = activeProducts(store);
+  const warehouses = activeWarehouses(store);
+  const [productId, setProductId] = useState<string | null>(products.length === 1 ? products[0].id : null);
+  const [warehouseId, setWarehouseId] = useState<string | null>(warehouses.length === 1 ? warehouses[0].id : null);
+  const [mode, setMode] = useState<'bags' | 'truck'>('bags');
   const [weigherId, setWeigherId] = useState<string | null>(user?.id || null);
   const [newDriver, setNewDriver] = useState('');
   const [note, setNote] = useState('');
@@ -159,7 +187,7 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
     if (!dId && newDriver.trim()) dId = store.addDriver({ name: newDriver }).id;
     let sId = sellerId;
     if (!sId && newSeller.trim()) sId = store.addSeller({ name: newSeller }).id;
-    const t = store.createTruck({ date, driverId: dId, sellerId: sId, weigherId, note });
+    const t = store.createTruck({ date, driverId: dId, sellerId: sId, weigherId, note, productId, warehouseId, weighMode: mode });
     haptic('success');
     toast(`Đã tạo ${t.name} lúc ${fmtTime(t.createdAt)}`, 'ok');
     onCreated(t.id);
@@ -190,6 +218,26 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
           {users.map((u) => <Pill key={u.id} text={u.name} color={weigherId === u.id ? 'blue' : 'gray'} onPress={() => setWeigherId(u.id)} />)}
         </View>
       </Field>
+      {products.length ? (
+        <Field label="Loại hàng">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {products.map((p) => <Pill key={p.id} text={p.name} color={productId === p.id ? 'blue' : 'gray'} small onPress={() => setProductId(productId === p.id ? null : p.id)} />)}
+          </View>
+        </Field>
+      ) : null}
+      {warehouses.length ? (
+        <Field label="Nhập kho">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {warehouses.map((w) => <Pill key={w.id} text={w.name} color={warehouseId === w.id ? 'blue' : 'gray'} small onPress={() => setWarehouseId(warehouseId === w.id ? null : w.id)} />)}
+          </View>
+        </Field>
+      ) : null}
+      <Field label="Kiểu cân">
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pill text="Cân từng bao" color={mode === 'bags' ? 'blue' : 'gray'} small onPress={() => setMode('bags')} />
+          <Pill text="Cân xe tải (vào − ra)" color={mode === 'truck' ? 'orange' : 'gray'} small onPress={() => setMode('truck')} />
+        </View>
+      </Field>
       <Field label="Ghi chú (tuỳ chọn)"><Input value={note} onChangeText={setNote} placeholder="VD: hàng của anh Ba, kho 2" /></Field>
       <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
         <Btn title="Huỷ" kind="ghost" onPress={onClose} style={{ flex: 1 }} />
@@ -217,6 +265,8 @@ const st = StyleSheet.create({
   truckSub: { color: C.muted, fontSize: 12.5, marginTop: 3, lineHeight: 17 },
   kg: { fontWeight: '800', fontSize: 17, color: C.text, fontVariant: ['tabular-nums'] },
   kgL: { fontSize: 11, color: C.muted },
+  remBox: { backgroundColor: '#fff', borderRadius: 12, paddingVertical: 4, paddingHorizontal: 12, marginBottom: 10 },
+  remRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   priceBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10 },
   priceVal: { fontWeight: '800', color: C.green, fontSize: 15, fontVariant: ['tabular-nums'] },
   fab: { position: 'absolute', alignSelf: 'center', backgroundColor: C.blue, paddingVertical: 14, paddingHorizontal: 22, borderRadius: 999, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: C.blue, shadowOpacity: 0.35, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 6 },

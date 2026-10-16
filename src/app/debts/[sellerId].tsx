@@ -7,7 +7,7 @@ import { PaymentSheet } from '../../components/PaymentSheet';
 import { Btn, Card, Empty, KV, Pill, Stats, TopBar } from '../../components/ui';
 import { truckStats } from '../../lib/calc';
 import { fmtDateVN, fmtKg, fmtMoney, fmtTime } from '../../lib/format';
-import { useStore } from '../../lib/store';
+import { canSeeMoney, useStore } from '../../lib/store';
 import { C } from '../../lib/theme';
 
 export default function SellerDebt() {
@@ -15,6 +15,7 @@ export default function SellerDebt() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const store = useStore();
+  const money = canSeeMoney(store);
   const id = sellerId === 'none' ? '' : sellerId || '';
   const seller = id ? store.sellers?.[id] : null;
   const [payTruck, setPayTruck] = useState<string | null>(null);
@@ -26,6 +27,14 @@ export default function SellerDebt() {
   const list = onlyOpen ? rows.filter((r) => (r.s.remaining || 0) > 0.5) : rows;
   const title = seller ? seller.name : id ? 'Người bán đã xoá' : 'Chưa gán người bán';
 
+  if (!money) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <TopBar title={title} onBack={() => router.back()} />
+        <Empty icon="lock-closed-outline" text="Quản lý đã ẩn thông tin tiền với nhân viên" />
+      </View>
+    );
+  }
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <TopBar title={title} subtitle={seller ? [seller.phone, seller.address].filter(Boolean).join(' · ') : undefined} onBack={() => router.back()} />

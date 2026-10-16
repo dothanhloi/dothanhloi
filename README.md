@@ -16,6 +16,15 @@ Mã nguồn backend Google Sheets nằm trong `google-apps-script/Code.gs`.
 | Người bán và công nợ | Mỗi xe gán **người bán** (thêm nhanh khi tạo xe). Màn hình **Công nợ** (icon ví ở trang chủ) tổng hợp còn nợ theo từng người, bấm vào trả tiền ngay. |
 | Phiếu cân gửi Zalo | Trên xe bấm **Phiếu cân (PDF)** → chia sẻ qua Zalo, Messages hoặc lưu file. Phiếu khổ A5 có tên cơ sở (nhập ở Cài đặt), bảng từng bao, tạp độ, giá, thành tiền, đã trả, chỗ ký. |
 | Giá tham chiếu theo ngày | Thanh **Giá tham chiếu** ở trang chủ: nhập một lần, xe tạo mới trong ngày tự lấy giá, vẫn sửa riêng từng xe. |
+| Báo cáo | **Báo cáo** (lối tắt trang chủ): theo ngày / tuần / tháng / năm; nhóm theo ngày, người bán, nhân viên, tài xế, loại hàng, kho; **xuất Excel (.xlsx)** nhiều sheet. |
+| Tồn kho, hedge | **Tồn kho**: nhập (thực nhận các xe) − xuất bán = tồn, theo từng kho. Ghi lệnh hedge (lot, tấn/lot) để thấy số tấn chưa hedge. |
+| Loại hàng, kho | Cài đặt → Loại hàng (gắn quy ước tạp độ riêng, tự áp khi chọn), Cài đặt → Kho. Chọn khi tạo xe hoặc trên xe. |
+| Ảnh | Trên xe: chụp / chọn ảnh mẫu hàng, phiếu cân giấy, xe hàng. Ảnh nén ~300 KB, lưu trong máy và tự tải lên Google Drive (thư mục "Cân Cà Phê - Ảnh") khi đã liên kết. |
+| Tìm xe | Icon kính lúp: tìm theo người bán, tài xế, biển số, SĐT, ngày, ghi chú; lọc đang cân / đã xong / còn nợ / chưa bốc. |
+| Phân quyền | Cài đặt → **Nhân viên thấy giá và tiền** (tắt: nhân viên chỉ thấy kg; giá, thành tiền, công nợ, phiếu cân bị ẩn). |
+| Cân xe tải | Khi tạo xe hoặc trên xe chọn **Cân xe tải**: nhập cân xe vào (có hàng) và xe ra (rỗng), hàng = vào − ra, số bao nhập tay. |
+| Bảo mật, sao lưu | PIN được băm SHA-256 (tài khoản cũ tự chuyển khi mở app). Sao lưu tự động mỗi ngày vào máy, giữ 7 bản. |
+| Nhắc việc | Trang chủ: xe hôm trước chưa bấm xong, xe xong chưa có giá, chưa bốc, công nợ quá hạn N ngày (N đặt trong Cài đặt). |
 | Chất lượng: mẫu (g), tạp, độ | Thẻ **Chất lượng & giá**: chọn **quy ước tạp độ**, nhập Mẫu (g), Tạp (g hoặc %), Độ (%) → app trừ theo quy ước → **Thực nhận**, **Giá sau trừ**. |
 | Giá cà phê | Nhập giá đ/kg → tự tính **Thành tiền** = thực nhận × giá. |
 | Sửa phải nhấn giữ, lưu lịch sử | Ô đã có số hoặc trường đã điền: bấm thường chỉ báo “Nhấn giữ để sửa”. Nhấn giữ ~0,5 giây mới sửa. Mọi thay đổi ghi vào **Lịch sử sửa** (ai, lúc nào, cũ → mới). |
@@ -115,7 +124,7 @@ Làm 1 lần trên tài khoản Google của bạn:
 5. Trong app: **Cài đặt → Liên kết Google Sheets** → dán link → **Lưu & kiểm tra kết nối**.
 6. Dán cùng link trên điện thoại của mọi nhân viên để dùng chung dữ liệu (nhân viên, tài xế, xe đều được đồng bộ).
 
-Các trang tự tạo trong Sheets: **Xe** (tổng kết từng xe), **Chi tiết cân** (từng bao), **Thanh toán**, **Công nợ**, **Lịch sử sửa**, **Người bán**, **Giá ngày**, **Quy ước**, **Nhân viên**, **Tài xế**, **DATA** (dữ liệu gốc – không sửa tay).
+Các trang tự tạo trong Sheets: **Xe**, **Chi tiết cân**, **Thanh toán**, **Công nợ**, **Xuất bán**, **Tồn kho**, **Hedge**, **Ảnh**, **Lịch sử sửa**, **Người bán**, **Giá ngày**, **Kho**, **Loại hàng**, **Quy ước**, **Nhân viên**, **Tài xế**, **DATA** (dữ liệu gốc – không sửa tay). Ảnh được lưu vào thư mục Google Drive "Cân Cà Phê - Ảnh" của tài khoản chạy script.
 
 Khi sửa `Code.gs`, vào **Triển khai → Quản lý triển khai → ✏️ → Phiên bản: Mới → Triển khai** thì link cũ mới chạy mã mới.
 
@@ -156,9 +165,14 @@ src/app/            màn hình (Expo Router)
   history/[id].tsx  lịch sử sửa của xe
   settings/         nhân viên, người bán, tài xế, quy ước tạp độ, Google Sheets, thông tin phiếu, sao lưu
   debts/            công nợ theo người bán, chi tiết từng người
+  reports/          báo cáo theo kỳ, nhóm, xuất Excel
+  inventory/        tồn kho, xuất bán, hedge
+  search/           tìm xe
 src/components/     WeighTable (bảng 5×5), NumPad (bàn phím số), PaymentSheet, ui (thành phần chung)
-src/lib/            store (zustand + AsyncStorage), calc, receipt (phiếu PDF), sync (Google), format, types
+src/lib/            store (zustand + AsyncStorage), calc, reports, receipt (phiếu PDF), xlsx, photos, backup, security, sync (Google), format, types
 google-apps-script/ Code.gs – backend Google Sheets
 ```
 
-Lưu ý bảo mật: PIN được lưu dạng chữ thường trên máy và Google Sheets của bạn (app nội bộ). Không dùng PIN trùng mật khẩu quan trọng.
+Lưu ý bảo mật: PIN được băm SHA-256 trước khi lưu và đồng bộ. Link Google Apps Script là "chìa khoá" vào dữ liệu, chỉ chia sẻ cho nhân viên.
+
+Chưa làm: kết nối cân điện tử Bluetooth (cần biết model cân và bản build riêng ngoài Expo Go), thông báo đẩy (push). Nhắc việc hiện hiển thị trong app khi mở.

@@ -18,12 +18,14 @@ export default function Users() {
   const [form, setForm] = useState<null | { id?: string; name: string; pin: string; role: Role }>(null);
   const [del, setDel] = useState<User | null>(null);
 
-  function save() {
+  async function save() {
     if (!form) return;
     if (form.name.trim().length < 2) return toast('Nhập tên nhân viên', 'err');
     if (!form.id || form.pin) { if (!/^\d{4}$/.test(form.pin)) return toast('PIN phải gồm 4 chữ số', 'err'); }
-    if (form.id) store.updateUser(form.id, { name: form.name.trim(), role: form.role, ...(form.pin ? { pin: form.pin } : {}) });
-    else store.addUser({ name: form.name, pin: form.pin, role: form.role });
+    if (form.id) {
+      store.updateUser(form.id, { name: form.name.trim(), role: form.role });
+      if (form.pin) await store.setUserPin(form.id, form.pin);
+    } else await store.addUser({ name: form.name, pin: form.pin, role: form.role });
     haptic('success');
     setForm(null);
   }
@@ -40,7 +42,7 @@ export default function Users() {
                 <Avatar name={u.name} />
                 <View style={{ flex: 1 }}>
                   <Text style={st.name}>{u.name}{u.id === me?.id ? '  (bạn)' : ''}</Text>
-                  <Text style={st.sub}>{u.role === 'admin' ? 'Quản lý' : 'Nhân viên'} · PIN ••••</Text>
+                  <Text style={st.sub}>{u.role === 'admin' ? 'Quản lý' : 'Nhân viên'} · PIN {u.pinHash ? 'đã mã hoá' : '••••'}</Text>
                 </View>
                 {isAdmin ? (
                   <View style={{ flexDirection: 'row', gap: 6 }}>

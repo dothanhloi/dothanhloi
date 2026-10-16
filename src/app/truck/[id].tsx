@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NumPad } from '../../components/NumPad';
 import { EditingCell, WeighTable } from '../../components/WeighTable';
@@ -11,12 +11,13 @@ import { shareReceipt } from '../../lib/receipt';
 import { presetOf, truckStats } from '../../lib/calc';
 import { presetSummary } from '../../lib/presetText';
 import { fmtDateTime, fmtDateVN, fmtKg, fmtMoney, fmtNum, fmtPct, fmtTime, parseNum } from '../../lib/format';
-import { activeDrivers, activePresets, activeSellers, activeUsers, driverName, paymentsOf, selectCurrentUser, sellerName, useStore, userName } from '../../lib/store';
+import { activeDrivers, activePresets, activeProducts, activeSellers, activeUsers, activeWarehouses, canSeeMoney, driverName, paymentsOf, photosOfTruck, productName, selectCurrentUser, sellerName, useStore, userName, warehouseName } from '../../lib/store';
+import { PHOTO_KINDS, deletePhotoFile, photoExists, takePhoto } from '../../lib/photos';
 import { C, shadow } from '../../lib/theme';
 import { toast } from '../../lib/toast';
 import type { PaymentStatus } from '../../lib/types';
 
-type FieldKey = 'price' | 'gram' | 'impurityGram' | 'impurityPct' | 'moisture' | 'paymentNote' | 'note' | 'name';
+type FieldKey = 'price' | 'gram' | 'impurityGram' | 'impurityPct' | 'moisture' | 'paymentNote' | 'note' | 'name' | 'grossIn' | 'tareOut' | 'truckBags';
 
 const FIELDS: Record<FieldKey, { title: string; what: string; path: string[]; unit?: string; keyboard: 'decimal' | 'number' | 'text'; hint?: string }> = {
   name: { title: 'Đổi tên xe', what: 'Tên xe', path: ['name'], keyboard: 'text' },
@@ -27,6 +28,9 @@ const FIELDS: Record<FieldKey, { title: string; what: string; path: string[]; un
   impurityPct: { title: 'Tạp chất', what: 'Tạp (%)', path: ['sample', 'impurityPct'], unit: '%', keyboard: 'decimal', hint: 'Nhập % tạp trực tiếp theo quy ước đang chọn' },
   paymentNote: { title: 'Ghi chú thanh toán', what: 'Ghi chú TT', path: ['payment', 'note'], keyboard: 'text' },
   note: { title: 'Ghi chú xe', what: 'Ghi chú', path: ['note'], keyboard: 'text' },
+  grossIn: { title: 'Xe vào (có hàng)', what: 'Cân xe vào (kg)', path: ['truckWeigh', 'grossIn'], unit: 'kg', keyboard: 'decimal', hint: 'Tổng khối lượng xe + hàng khi vào' },
+  tareOut: { title: 'Xe ra (rỗng)', what: 'Cân xe ra (kg)', path: ['truckWeigh', 'tareOut'], unit: 'kg', keyboard: 'decimal', hint: 'Khối lượng xe không hàng khi ra' },
+  truckBags: { title: 'Số bao', what: 'Số bao', path: ['truckWeigh', 'bags'], unit: 'bao', keyboard: 'number', hint: 'Dùng để trừ bì theo bao (nếu quy ước có)' },
 };
 
 export default function TruckScreen() {
@@ -45,6 +49,12 @@ export default function TruckScreen() {
   const [payOpen, setPayOpen] = useState(false);
   const [delPay, setDelPay] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [pickProduct, setPickProduct] = useState(false);
+  const [pickWarehouse, setPickWarehouse] = useState(false);
+  const [photoKind, setPhotoKind] = useState<null | 'menu'>(null);
+  const [delPhoto, setDelPhoto] = useState<string | null>(null);
+  const [viewPhoto, setViewPhoto] = useState<string | null>(null);
+  const [askMode, setAskMode] = useState<'bags' | 'truck' | null>(null);
   const [askDone, setAskDone] = useState(false);
   const [askReopen, setAskReopen] = useState(false);
   const [askDelete, setAskDelete] = useState(false);
@@ -107,6 +117,14 @@ export default function TruckScreen() {
   const allLocked = t.tables.every((tb) => tb.locked);
   const preset = presetOf(t);
   const presets = activePresets(store);
+  const money = canSeeMoney(store);
+  const isTruckMode = (t.weighMode || 'bags') === 'truck';
+  const photos = photosOfTruck(store, t.id);
+  const addPhoto = async (kind: typeof PHOTO_KINDS[number]['v'], fromLibrary: boolean) => {
+    setPhotoKind(null);
+    try { const p = await takePhoto(t.id, kind, fromLibrary); if (p) { haptic('success'); toast('Đã thêm ảnh', 'ok'); } }
+    catch (e: any) { toast(e?.message || String(e), 'err', 3000); }
+  };
 
   const onKey = (k: string) => setEditing((e) => {
     if (!e) return e;
@@ -180,7 +198,7 @@ export default function TruckScreen() {
         right={
           <>
             <IconBtn name={allLocked ? 'lock-closed' : 'lock-open-outline'} color={allLocked ? 'gray' : 'blue'} onPress={() => { if (readOnly) return toast('Xe đã xong'); haptic(); setEditing(null); store.lockAllTables(t.id, !allLocked); }} />
-            <IconBtn name="share-outline" color="green" onPress={doShare} />
+            {money ? <IconBtn name="share-outline" color="green" onPress={doShare} /> : null}
             <IconBtn name="time-outline" color="blue" onPress={() => router.push(`/history/${t.id}`)} />
             <IconBtn name="trash-outline" color="red" onPress={() => setAskDelete(true)} />
           </>
@@ -199,10 +217,14 @@ export default function TruckScreen() {
               <Text style={st.doneRow}><Text style={st.doneK}>Thực nhận </Text><Text style={st.doneV}>{fmtKg(s.net)} kg</Text></Text>
               <Text style={st.doneRow}><Text style={st.doneK}>Tạp </Text><Text style={st.doneV}>{s.impurityPct != null ? fmtPct(s.impurityPct) : '—'}</Text></Text>
               <Text style={st.doneRow}><Text style={st.doneK}>Độ </Text><Text style={st.doneV}>{s.moistureVal != null ? fmtPct(s.moistureVal, 1) : '—'}</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Giá </Text><Text style={st.doneV}>{s.effectivePrice != null ? fmtMoney(s.effectivePrice) + '/kg' : '—'}</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Thành tiền </Text><Text style={st.doneV}>{fmtMoney(s.amount)}</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Đã TT </Text><Text style={st.doneV}>{fmtMoney(s.paid)}</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Còn lại </Text><Text style={st.doneV}>{fmtMoney(s.remaining)}</Text></Text>
+              {money ? (
+                <>
+                  <Text style={st.doneRow}><Text style={st.doneK}>Giá </Text><Text style={st.doneV}>{s.effectivePrice != null ? fmtMoney(s.effectivePrice) + '/kg' : '—'}</Text></Text>
+                  <Text style={st.doneRow}><Text style={st.doneK}>Thành tiền </Text><Text style={st.doneV}>{fmtMoney(s.amount)}</Text></Text>
+                  <Text style={st.doneRow}><Text style={st.doneK}>Đã TT </Text><Text style={st.doneV}>{fmtMoney(s.paid)}</Text></Text>
+                  <Text style={st.doneRow}><Text style={st.doneK}>Còn lại </Text><Text style={st.doneV}>{fmtMoney(s.remaining)}</Text></Text>
+                </>
+              ) : null}
             </View>
           </Pressable>
         ) : null}
@@ -223,23 +245,58 @@ export default function TruckScreen() {
           </View>
           <KV label="Người bán" value={sellerName(store, t.sellerId) || 'Chọn người bán'} empty={!t.sellerId} onPress={() => !readOnly && setPickSeller(true)} />
           <KV label="Tài xế" value={driverName(store, t.driverId) || 'Chọn tài xế'} empty={!t.driverId} onPress={() => !readOnly && setPickDriver(true)} />
+          <KV label="Loại hàng" value={productName(store, t.productId) || 'Chọn loại hàng'} empty={!t.productId} onPress={() => !readOnly && setPickProduct(true)} />
+          <KV label="Nhập kho" value={warehouseName(store, t.warehouseId) || 'Chọn kho'} empty={!t.warehouseId} onPress={() => !readOnly && setPickWarehouse(true)} />
           <KV label="Nhân viên đi cân" value={userName(store, t.weigherId) || 'Chọn nhân viên'} empty={!t.weigherId} onPress={() => !readOnly && setPickWeigher(true)} />
           <KV label="Giờ tạo xe" sub={t.createdByName ? `bởi ${t.createdByName}` : undefined} value={fmtDateTime(t.createdAt)} />
           {t.loaded && t.loadedAt ? <KV label="Bốc hàng lúc" value={fmtDateTime(t.loadedAt)} /> : null}
           <KV label="Ghi chú" value={t.note || 'Thêm ghi chú'} {...guarded('note')} />
         </Card>
 
-        {/* Bảng cân */}
-        {t.tables.map((tb, i) => (
-          <WeighTable key={tb.id} table={tb} tableIdx={i} editing={editing} readOnly={readOnly}
-            onCellPress={onCellPress} onCellLongPress={onCellLongPress} onToggleLock={onToggleLock} />
-        ))}
-        {!readOnly ? (
-          <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
-            <Btn title="Thêm bảng" kind="secondary" icon="add" small onPress={() => { haptic(); store.addTable(t.id); }} style={{ flex: 1 }} />
-            <Btn title="Bớt bảng" kind="ghost" icon="remove" small onPress={() => { if (!store.removeLastTable(t.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }} style={{ flex: 1 }} />
-          </View>
-        ) : null}
+        {/* Kiểu cân */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <Toggle value={isTruckMode ? 'truck' : 'bags'} onChange={(v) => { if (readOnly) return toast('Xe đã xong'); setAskMode(v); }}
+            options={[{ v: 'bags', label: 'Cân từng bao', color: 'blue' }, { v: 'truck', label: 'Cân xe tải', color: 'orange' }]} />
+        </View>
+
+        {isTruckMode ? (
+          <Card title="Cân xe tải (cân bàn ô tô)">
+            <KV label="Xe vào (có hàng)" value={t.truckWeigh?.grossIn != null ? fmtKg(t.truckWeigh.grossIn) : 'Nhập'} unit={t.truckWeigh?.grossIn != null ? 'kg' : undefined} {...guarded('grossIn')} />
+            <KV label="Xe ra (rỗng)" value={t.truckWeigh?.tareOut != null ? fmtKg(t.truckWeigh.tareOut) : 'Nhập'} unit={t.truckWeigh?.tareOut != null ? 'kg' : undefined} {...guarded('tareOut')} />
+            <KV label="Hàng (vào − ra)" value={fmtKg(s.gross)} unit="kg" highlight="blue" />
+            <KV label="Số bao" value={t.truckWeigh?.bags != null ? String(t.truckWeigh.bags) : 'Nhập'} unit={t.truckWeigh?.bags != null ? 'bao' : undefined} {...guarded('truckBags')} />
+          </Card>
+        ) : (
+          <>
+            {t.tables.map((tb, i) => (
+              <WeighTable key={tb.id} table={tb} tableIdx={i} editing={editing} readOnly={readOnly}
+                onCellPress={onCellPress} onCellLongPress={onCellLongPress} onToggleLock={onToggleLock} />
+            ))}
+            {!readOnly ? (
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+                <Btn title="Thêm bảng" kind="secondary" icon="add" small onPress={() => { haptic(); store.addTable(t.id); }} style={{ flex: 1 }} />
+                <Btn title="Bớt bảng" kind="ghost" icon="remove" small onPress={() => { if (!store.removeLastTable(t.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }} style={{ flex: 1 }} />
+              </View>
+            ) : null}
+          </>
+        )}
+
+        {/* Ảnh */}
+        <Card title={`Ảnh (${photos.length})`} right={!readOnly ? <Pill text="+ Chụp" color="blue" small icon="camera" onPress={() => setPhotoKind('menu')} /> : undefined}>
+          {photos.length === 0 ? <Text style={{ color: C.muted, fontSize: 13 }}>Chụp ảnh mẫu hàng, phiếu cân giấy, xe hàng. Ảnh tự tải lên Google Drive khi đã liên kết Google Sheets.</Text> : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {photos.map((p) => {
+                const uri = photoExists(p) ? p.localUri! : p.driveUrl ? driveThumb(p.driveUrl) : null;
+                return (
+                  <Pressable key={p.id} onPress={() => setViewPhoto(p.id)} onLongPress={() => { if (readOnly) return; haptic('medium'); setDelPhoto(p.id); }} delayLongPress={600} style={st.thumbWrap}>
+                    {uri ? <Image source={{ uri }} style={st.thumb} /> : <View style={[st.thumb, { alignItems: 'center', justifyContent: 'center' }]}><Ionicons name="cloud-offline-outline" size={22} color={C.muted} /></View>}
+                    <Text style={st.thumbLabel} numberOfLines={1}>{PHOTO_KINDS.find((k) => k.v === p.kind)?.label}{p.driveUrl ? ' ☁︎' : ''}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
+        </Card>
 
         {/* Chất lượng & giá */}
         <Card title="Chất lượng & giá" right={<Text style={{ fontSize: 11, color: C.muted }}>nhấn giữ để sửa</Text>}>
@@ -257,13 +314,17 @@ export default function TruckScreen() {
           {s.impurity.kg > 0 ? <KV label="Trừ tạp" value={'−' + fmtKg(s.impurity.kg)} unit="kg" /> : null}
           {s.moisture.kg > 0 ? <KV label="Trừ độ" value={'−' + fmtKg(s.moisture.kg)} unit="kg" /> : null}
           <KV label="Thực nhận" value={fmtKg(s.net)} unit="kg" highlight="green" />
-          <KV label="Giá" value={t.price != null ? fmtMoney(t.price) : 'Nhập giá'} unit={t.price != null ? '/kg' : undefined} {...guarded('price')} />
-          {s.priceDeduct > 0 ? <KV label="Giá sau trừ" sub={`trừ ${fmtMoney(s.priceDeduct)}/kg (tạp ${fmtMoney(s.impurity.price)} + độ ${fmtMoney(s.moisture.price)})`} value={fmtMoney(s.effectivePrice)} unit="/kg" /> : null}
-          <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" />
+          {money ? (
+            <>
+              <KV label="Giá" value={t.price != null ? fmtMoney(t.price) : 'Nhập giá'} unit={t.price != null ? '/kg' : undefined} {...guarded('price')} />
+              {s.priceDeduct > 0 ? <KV label="Giá sau trừ" sub={`trừ ${fmtMoney(s.priceDeduct)}/kg (tạp ${fmtMoney(s.impurity.price)} + độ ${fmtMoney(s.moisture.price)})`} value={fmtMoney(s.effectivePrice)} unit="/kg" /> : null}
+              <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" />
+            </>
+          ) : null}
         </Card>
 
         {/* Thanh toán */}
-        <Card title="Thanh toán" right={<Pill text={t.payment.status === 'paid' ? 'Đã thanh toán' : t.payment.status === 'partial' ? 'Một phần' : 'Chưa thanh toán'} color={t.payment.status === 'paid' ? 'green' : t.payment.status === 'partial' ? 'orange' : 'red'} small />}>
+        {money ? <Card title="Thanh toán" right={<Pill text={t.payment.status === 'paid' ? 'Đã thanh toán' : t.payment.status === 'partial' ? 'Một phần' : 'Chưa thanh toán'} color={t.payment.status === 'paid' ? 'green' : t.payment.status === 'partial' ? 'orange' : 'red'} small />}>
           <KV label="Thành tiền" value={fmtMoney(s.amount)} />
           <KV label="Đã thanh toán" sub={payments.length ? `${payments.length} lần` : undefined} value={fmtMoney(s.paid)} highlight="green" />
           <KV label="Còn lại" value={fmtMoney(s.remaining)} highlight={s.remaining != null && s.remaining > 0.5 ? 'red' : 'green'} />
@@ -284,9 +345,9 @@ export default function TruckScreen() {
           </View>
           <KV label="Ghi chú TT" value={t.payment.note || 'Thêm ghi chú'} {...guarded('paymentNote')} />
           {payments.length ? <Text style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>Nhấn giữ một dòng thanh toán để xoá (ghi vào lịch sử).</Text> : null}
-        </Card>
+        </Card> : null}
 
-        <Btn title={sharing ? 'Đang tạo phiếu...' : 'Phiếu cân (PDF) gửi Zalo'} kind="secondary" icon="document-text-outline" onPress={doShare} disabled={sharing} style={{ marginBottom: 12 }} />
+        {money ? <Btn title={sharing ? 'Đang tạo phiếu...' : 'Phiếu cân (PDF) gửi Zalo'} kind="secondary" icon="document-text-outline" onPress={doShare} disabled={sharing} style={{ marginBottom: 12 }} /> : null}
 
         <Pressable onPress={() => router.push(`/history/${t.id}`)} style={[st.histLink, shadow]}>
           <Ionicons name="time-outline" size={18} color={C.blue} />
@@ -301,7 +362,7 @@ export default function TruckScreen() {
           {readOnly ? (
             <Btn title="Mở lại xe (nhấn giữ)" kind="ghost" icon="lock-open-outline" onLongPress={() => { haptic('medium'); setAskReopen(true); }} onPress={() => toast('Nhấn giữ để mở lại xe')} />
           ) : (
-            <Btn title="Xong xe" kind="success" icon="checkmark-circle" onPress={() => { if (s.bags === 0) return toast('Chưa có bao nào được cân', 'err'); setAskDone(true); }} />
+            <Btn title="Xong xe" kind="success" icon="checkmark-circle" onPress={() => { if (s.gross <= 0) return toast(isTruckMode ? 'Chưa nhập cân xe vào / xe ra' : 'Chưa có bao nào được cân', 'err'); setAskDone(true); }} />
           )}
         </View>
       ) : null}
@@ -339,6 +400,44 @@ export default function TruckScreen() {
         <AddSellerInline onAdded={(id) => { store.setField(t.id, 'Người bán', ['sellerId'], id); setPickSeller(false); }} />
       </Sheet>
 
+      <Sheet visible={pickProduct} onClose={() => setPickProduct(false)} title="Loại hàng" desc="Chọn loại hàng cũng áp dụng quy ước tạp độ gắn với loại đó (nếu có). Quản lý trong Cài đặt → Loại hàng.">
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+          {activeProducts(store).map((d) => <Pill key={d.id} text={d.name} color={t.productId === d.id ? 'blue' : 'gray'}
+            onPress={() => { store.setField(t.id, 'Loại hàng', ['productId'], d.id); if (d.presetId && store.presets[d.presetId] && !store.presets[d.presetId].deleted && preset.id !== d.presetId) store.applyPreset(t.id, d.presetId); setPickProduct(false); }} />)}
+          {activeProducts(store).length === 0 ? <Text style={{ color: C.muted }}>Chưa có loại hàng. Thêm trong Cài đặt → Loại hàng.</Text> : null}
+        </View>
+        <Btn title="Quản lý loại hàng" kind="secondary" small onPress={() => { setPickProduct(false); router.push('/settings/products'); }} />
+      </Sheet>
+      <Sheet visible={pickWarehouse} onClose={() => setPickWarehouse(false)} title="Nhập vào kho">
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+          {activeWarehouses(store).map((d) => <Pill key={d.id} text={d.name} color={t.warehouseId === d.id ? 'blue' : 'gray'}
+            onPress={() => { store.setField(t.id, 'Kho', ['warehouseId'], d.id); setPickWarehouse(false); }} />)}
+          {activeWarehouses(store).length === 0 ? <Text style={{ color: C.muted }}>Chưa có kho. Thêm trong Cài đặt → Kho.</Text> : null}
+        </View>
+        <Btn title="Quản lý kho" kind="secondary" small onPress={() => { setPickWarehouse(false); router.push('/settings/warehouses'); }} />
+      </Sheet>
+      <Sheet visible={photoKind === 'menu'} onClose={() => setPhotoKind(null)} title="Thêm ảnh" desc="Ảnh được nén còn khoảng 200–400 KB trước khi lưu.">
+        {PHOTO_KINDS.map((k) => (
+          <View key={k.v} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <Text style={{ flex: 1, fontWeight: '600', color: C.text }}>{k.label}</Text>
+            <Btn title="Chụp" kind="primary" small icon="camera" onPress={() => addPhoto(k.v, false)} />
+            <Btn title="Thư viện" kind="secondary" small icon="images" onPress={() => addPhoto(k.v, true)} />
+          </View>
+        ))}
+      </Sheet>
+      <Sheet visible={!!viewPhoto} onClose={() => setViewPhoto(null)} title={viewPhoto ? (PHOTO_KINDS.find((k) => k.v === store.photos[viewPhoto]?.kind)?.label || 'Ảnh') : ''}>
+        {viewPhoto && store.photos[viewPhoto] ? (() => { const p = store.photos[viewPhoto]; const uri = photoExists(p) ? p.localUri! : p.driveUrl ? driveThumb(p.driveUrl, 1600) : null; return (
+          <>
+            {uri ? <Image source={{ uri }} style={{ width: '100%', aspectRatio: 3 / 4, borderRadius: 12, backgroundColor: C.gray }} resizeMode="contain" /> : <Text style={{ color: C.muted }}>Ảnh chưa có trên máy này và chưa được tải lên Google Drive.</Text>}
+            <Text style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>{p.byName ? `${p.byName} · ` : ''}{fmtDateTime(p.createdAt)}{p.driveUrl ? ' · đã lưu Google Drive' : ' · chưa tải lên'}</Text>
+            {p.driveUrl ? <Btn title="Mở trên Google Drive" kind="ghost" small icon="open-outline" onPress={() => Linking.openURL(p.driveUrl!)} style={{ marginTop: 8, alignSelf: 'flex-start' }} /> : null}
+          </>); })() : null}
+      </Sheet>
+      <ConfirmSheet visible={!!delPhoto} onClose={() => setDelPhoto(null)} title="Xoá ảnh này?" danger confirmText="Xoá" onConfirm={() => { if (delPhoto) { const p = store.photos[delPhoto]; if (p) deletePhotoFile(p); store.removePhoto(delPhoto); } setDelPhoto(null); }} />
+      <ConfirmSheet visible={!!askMode} onClose={() => setAskMode(null)} title={askMode === 'truck' ? 'Chuyển sang cân xe tải?' : 'Chuyển sang cân từng bao?'}
+        desc={askMode === 'truck' ? 'Tổng thô sẽ tính bằng cân xe vào trừ cân xe ra. Các bảng bao được giữ nhưng không tính.' : 'Tổng thô sẽ tính từ các bảng bao.'} confirmText="Chuyển"
+        onConfirm={() => { if (askMode) store.setWeighMode(t.id, askMode); setAskMode(null); }} />
+
       <PaymentSheet truckId={payOpen ? t.id : null} onClose={() => setPayOpen(false)} />
       <ConfirmSheet visible={!!delPay} onClose={() => setDelPay(null)} title="Xoá lần thanh toán này?" danger confirmText="Xoá" desc="Số tiền sẽ được cộng lại vào còn nợ. Việc xoá ghi vào lịch sử."
         onConfirm={() => { if (delPay) store.removePayment(t.id, delPay); setDelPay(null); }} />
@@ -364,7 +463,7 @@ export default function TruckScreen() {
           <KV label="Tổng bao" value={String(s.bags)} />
           <KV label="Tổng thô" value={fmtKg(s.gross)} unit="kg" />
           <KV label="Thực nhận" value={fmtKg(s.net)} unit="kg" highlight="green" />
-          <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" />
+          {money ? <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" /> : null}
           <KV label="Người bán" value={sellerName(store, t.sellerId) || '—'} />
           <KV label="Tài xế" value={driverName(store, t.driverId) || '—'} />
           <KV label="Nhân viên cân" value={userName(store, t.weigherId) || '—'} />
@@ -380,6 +479,12 @@ export default function TruckScreen() {
         onConfirm={() => { if (user?.role !== 'admin') { setAskDelete(false); return toast('Chỉ quản lý mới được xoá xe', 'err'); } setAskDelete(false); store.removeTruck(t.id); router.back(); }} />
     </View>
   );
+}
+
+/** Link xem ảnh Google Drive (uc?export=view) từ link share */
+function driveThumb(url: string, size = 400): string {
+  const m = url.match(/[-\w]{25,}/);
+  return m ? `https://drive.google.com/thumbnail?id=${m[0]}&sz=w${size}` : url;
 }
 
 function AddSellerInline({ onAdded }: { onAdded: (id: string) => void }) {
@@ -424,6 +529,9 @@ const st = StyleSheet.create({
   doneRow: { width: '50%', color: '#fff', fontSize: 13.5, marginBottom: 4 },
   doneK: { color: 'rgba(255,255,255,0.85)' },
   doneV: { fontWeight: '700', color: '#fff', fontVariant: ['tabular-nums'] },
+  thumbWrap: { width: 96 },
+  thumb: { width: 96, height: 96, borderRadius: 10, backgroundColor: C.gray },
+  thumbLabel: { fontSize: 11, color: C.muted, marginTop: 3, textAlign: 'center' },
   payRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   presetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 12, borderWidth: 1.5, borderColor: C.line, marginBottom: 8 },
   histLink: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 12 },

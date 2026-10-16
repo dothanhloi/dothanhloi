@@ -4,7 +4,10 @@ export interface User {
   id: string;
   type: 'user';
   name: string;
+  /** @deprecated PIN dạng chữ thường (tài khoản cũ); sau khi băm sẽ là '' */
   pin: string;
+  /** SHA-256(pin + salt) */
+  pinHash?: string;
   role: Role;
   createdAt: string;
   updatedAt: string;
@@ -56,7 +59,12 @@ export interface Truck {
   name: string;
   driverId: string | null;
   sellerId?: string | null;
+  warehouseId?: string | null;
+  productId?: string | null;
   weigherId: string | null;
+  /** 'bags' = cân từng bao (mặc định); 'truck' = cân xe tải (xe vào − xe ra) */
+  weighMode?: WeighMode;
+  truckWeigh?: { grossIn: number | null; tareOut: number | null; bags: number | null };
   createdAt: string;
   createdBy: string | null;
   createdByName: string;
@@ -85,7 +93,7 @@ export interface Truck {
   deleted?: boolean;
 }
 
-export type SyncRecord = User | Driver | Truck | QualityPreset | Seller | DayPrice;
+export type SyncRecord = User | Driver | Truck | QualityPreset | Seller | DayPrice | Warehouse | Product | Sale | Hedge | Photo;
 
 export interface Settings {
   sheetUrl: string;
@@ -97,6 +105,11 @@ export interface Settings {
   tablesPerTruck: number;
   defaultPresetId?: string | null;
   company?: Company;
+  /** nhân viên (không phải quản lý) có được thấy giá và tiền không */
+  staffCanSeeMoney?: boolean;
+  /** nhắc công nợ quá hạn sau N ngày kể từ khi xong xe */
+  debtDueDays?: number;
+  lastBackup?: string | null;
 }
 
 /* ---------- Quy ước tạp / độ (preset) ---------- */
@@ -185,3 +198,78 @@ export interface Company {
   address: string;
   footer: string;
 }
+
+/* ---------- Nhóm 2 & 3: kho, loại hàng, xuất bán, hedge, ảnh ---------- */
+export interface Warehouse {
+  id: string;
+  type: 'warehouse';
+  name: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+export interface Product {
+  id: string;
+  type: 'product';
+  name: string;
+  /** quy ước tạp độ mặc định cho loại hàng này */
+  presetId: string | null;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+/** Xuất bán / xuất kho */
+export interface Sale {
+  id: string;
+  type: 'sale';
+  date: string;
+  warehouseId: string | null;
+  productId: string | null;
+  kg: number;
+  price: number | null;
+  buyer: string;
+  note: string;
+  byName: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+/** Vị thế hedge trên sàn (ghi nhận tay) */
+export interface Hedge {
+  id: string;
+  type: 'hedge';
+  date: string;
+  /** số lot bán (+) hoặc mua lại (−) */
+  lots: number;
+  /** tấn mỗi lot, London Robusta = 10 */
+  tonsPerLot: number;
+  price: number | null;
+  note: string;
+  byName: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+export interface Photo {
+  id: string;
+  type: 'photo';
+  truckId: string;
+  kind: 'sample' | 'ticket' | 'truck' | 'other';
+  note: string;
+  /** đường dẫn file trên máy đã chụp (không đồng bộ) */
+  localUri?: string;
+  /** link Google Drive sau khi tải lên */
+  driveUrl: string | null;
+  byName: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+export type WeighMode = 'bags' | 'truck';

@@ -41,6 +41,13 @@
           "resizeMode": "contain",
           "backgroundColor": "#2F45FF"
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Ứng dụng cần truy cập thư viện ảnh để đính kèm ảnh mẫu hàng, phiếu cân vào xe.",
+          "cameraPermission": "Ứng dụng cần máy ảnh để chụp ảnh mẫu hàng, phiếu cân, xe hàng."
+        }
       ]
     ],
     "experiments": {

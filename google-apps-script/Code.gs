@@ -20,7 +20,8 @@
  *   Lịch sử sửa   : mọi thay đổi (ai, lúc nào, cũ → mới)
  *   Thanh toán    : từng lần trả tiền
  *   Công nợ       : tổng còn nợ theo người bán
- *   Người bán, Giá ngày
+ *   Người bán, Giá ngày, Kho, Loại hàng
+ *   Xuất bán, Tồn kho, Hedge, Ảnh (link Google Drive, thư mục "Cân Cà Phê - Ảnh")
  *   Quy ước      : các quy ước tạp/độ
  *   Nhân viên, Tài xế
  */
@@ -44,6 +45,10 @@ function doPost(e) {
     lock.waitLock(30000);
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var action = body.action || 'sync';
+    if (action === 'photo') {
+      var url = savePhoto_(body);
+      return json_({ ok: true, url: url });
+    }
     if (action === 'sync' || action === 'push') {
       var incoming = Array.isArray(body.records) ? body.records : [];
       var n = upsert_(incoming);
@@ -57,6 +62,24 @@ function doPost(e) {
   } finally {
     try { lock.releaseLock(); } catch (ignore) {}
   }
+}
+
+/* ---------------- ảnh lên Google Drive ---------------- */
+var PHOTO_FOLDER = 'Cân Cà Phê - Ảnh';
+function photoFolder_() {
+  var it = DriveApp.getFoldersByName(PHOTO_FOLDER);
+  var folder = it.hasNext() ? it.next() : DriveApp.createFolder(PHOTO_FOLDER);
+  return folder;
+}
+function savePhoto_(body) {
+  if (!body.base64) throw new Error('Thiếu dữ liệu ảnh');
+  var folder = photoFolder_();
+  var name = String(body.name || (body.id + '.jpg')).replace(/[\\/:*?"<>|]/g, '_');
+  // nếu đã có file cùng tên thì dùng lại
+  var ex = folder.getFilesByName(name);
+  var file = ex.hasNext() ? ex.next() : folder.createFile(Utilities.newBlob(Utilities.base64Decode(body.base64), body.mime || 'image/jpeg', name));
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+  return 'https://drive.google.com/file/d/' + file.getId() + '/view';
 }
 
 /* ---------------- lưu trữ ---------------- */
@@ -152,11 +175,17 @@ function applyRule_(rule, measured, gross) {
 }
 function truckStats_(t) {
   var bags = 0, gross = 0;
-  (t.tables || []).forEach(function (tb) {
-    (tb.cells || []).forEach(function (col) {
-      col.forEach(function (v) { if (v !== null && v !== undefined && v !== '') { bags++; gross += Number(v) || 0; } });
+  if ((t.weighMode || 'bags') === 'truck') {
+    var w = t.truckWeigh || {};
+    gross = w.grossIn != null && w.tareOut != null && w.grossIn !== '' && w.tareOut !== '' ? Math.max(0, Number(w.grossIn) - Number(w.tareOut)) : 0;
+    bags = Number(w.bags) || 0;
+  } else {
+    (t.tables || []).forEach(function (tb) {
+      (tb.cells || []).forEach(function (col) {
+        col.forEach(function (v) { if (v !== null && v !== undefined && v !== '') { bags++; gross += Number(v) || 0; } });
+      });
     });
-  });
+  }
   var p = t.preset || legacyPreset_(t);
   var sample = t.sample || {};
   var tare = 0;
@@ -196,12 +225,17 @@ function round1_(n) { return Math.round((Number(n) || 0) * 10) / 10; }
 /* ---------------- các trang dễ đọc ---------------- */
 function rebuildViews_() {
   var all = readAll_();
-  var users = {}, drivers = {}, sellers = {}, trucks = [], presets = [], dayPrices = [];
+  var users = {}, drivers = {}, sellers = {}, warehouses = {}, products = {}, trucks = [], presets = [], dayPrices = [], sales = [], hedges = [], photos = [];
   all.forEach(function (r) {
     if (r.type === 'user') users[r.id] = r;
     else if (r.type === 'driver') drivers[r.id] = r;
     else if (r.type === 'seller') sellers[r.id] = r;
+    else if (r.type === 'warehouse') warehouses[r.id] = r;
+    else if (r.type === 'product') products[r.id] = r;
     else if (r.type === 'dayprice') dayPrices.push(r);
+    else if (r.type === 'sale' && !r.deleted) sales.push(r);
+    else if (r.type === 'hedge' && !r.deleted) hedges.push(r);
+    else if (r.type === 'photo' && !r.deleted) photos.push(r);
     else if (r.type === 'preset') presets.push(r);
     else if (r.type === 'truck' && !r.deleted) trucks.push(r);
   });
@@ -209,14 +243,18 @@ function rebuildViews_() {
   var uname = function (id) { return (id && users[id] && users[id].name) || ''; };
   var dname = function (id) { return (id && drivers[id] && drivers[id].name) || ''; };
   var sname = function (id) { return (id && sellers[id] && sellers[id].name) || ''; };
+  var wname = function (id) { return (id && warehouses[id] && warehouses[id].name) || ''; };
+  var pname = function (id) { return (id && products[id] && products[id].name) || ''; };
+  var truckById = {};
+  trucks.forEach(function (t) { truckById[t.id] = t; });
 
   // Xe
-  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Người bán', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
+  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Người bán', 'Loại hàng', 'Kho', 'Kiểu cân', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
     'Tổng bao', 'Tổng thô (kg)', 'TB/bao (kg)', 'Quy ước', 'Mẫu (g)', 'Tạp (g)', 'Tạp (%)', 'Trừ tạp (kg)', 'Trừ tạp (đ/kg)', 'Độ (%)', 'Trừ độ (kg)', 'Trừ độ (đ/kg)', 'Trừ bì (kg)',
     'Thực nhận (kg)', 'Giá (đ/kg)', 'Giá sau trừ (đ/kg)', 'Thành tiền (đ)', 'Thanh toán', 'Đã TT (đ)', 'Còn lại (đ)', 'Ghi chú TT', 'Ghi chú', 'Số lần sửa', 'ID'];
   var rows = trucks.map(function (t) {
     var s = truckStats_(t);
-    return [fmtDate_(t.date), t.seq, t.name, sname(t.sellerId), dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
+    return [fmtDate_(t.date), t.seq, t.name, sname(t.sellerId), pname(t.productId), wname(t.warehouseId), (t.weighMode || 'bags') === 'truck' ? 'Xe tải' : 'Từng bao', dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
       t.status === 'done' ? 'Đã xong' : 'Đang cân', fmtTime_(t.doneAt), t.doneByName || uname(t.doneBy), t.loaded ? 'Đã bốc' : 'Chưa bốc',
       s.bags, round1_(s.gross), round1_(s.avg), s.presetName, nz_(t.sample && t.sample.gram), nz_(t.sample && t.sample.impurityGram), s.impurityPct == null ? '' : Math.round(s.impurityPct * 100) / 100, round1_(s.impurityKg), Math.round(s.impurityPrice),
       s.moisture == null ? '' : s.moisture, round1_(s.moistureKg), Math.round(s.moisturePrice), round1_(s.tare),
@@ -254,7 +292,7 @@ function rebuildViews_() {
   writeSheet_('Lịch sử sửa', h3, r3);
 
   // Nhân viên, Tài xế
-  writeSheet_('Nhân viên', ['Tên', 'Vai trò', 'Trạng thái', 'Tạo lúc', 'ID'], Object.keys(users).map(function (k) { var u = users[k]; return [u.name, u.role === 'admin' ? 'Quản lý' : 'Nhân viên', u.deleted ? 'Đã xoá' : 'Hoạt động', fmtTime_(u.createdAt), u.id]; }));
+  writeSheet_('Nhân viên', ['Tên', 'Vai trò', 'PIN', 'Trạng thái', 'Tạo lúc', 'ID'], Object.keys(users).map(function (k) { var u = users[k]; return [u.name, u.role === 'admin' ? 'Quản lý' : 'Nhân viên', u.pinHash ? 'đã mã hoá' : 'chưa mã hoá', u.deleted ? 'Đã xoá' : 'Hoạt động', fmtTime_(u.createdAt), u.id]; }));
   // Thanh toán
   var h4 = ['Thời gian', 'Ngày xe', 'Xe', 'Người bán', 'Số tiền (đ)', 'Hình thức', 'Người ghi', 'Ghi chú', 'ID xe'];
   var r4 = [];
@@ -281,6 +319,23 @@ function rebuildViews_() {
   writeSheet_('Người bán', ['Tên', 'SĐT', 'Địa chỉ', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(sellers).map(function (k) { var x = sellers[k]; return [x.name, x.phone || '', x.address || '', x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
   dayPrices.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
   writeSheet_('Giá ngày', ['Ngày', 'Giá (đ/kg)', 'Ghi chú', 'Người nhập', 'Cập nhật'], dayPrices.filter(function (x) { return !x.deleted; }).map(function (x) { return [fmtDate_(x.date), x.price == null ? '' : x.price, x.note || '', x.byName || '', fmtTime_(x.updatedAt)]; }));
+
+  // Xuất bán, tồn kho, hedge, ảnh, kho, loại hàng
+  sales.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  writeSheet_('Xuất bán', ['Ngày', 'Kho', 'Loại hàng', 'Số kg', 'Giá bán (đ/kg)', 'Thành tiền (đ)', 'Người mua', 'Ghi chú', 'Người ghi', 'ID'],
+    sales.map(function (x) { return [fmtDate_(x.date), wname(x.warehouseId), pname(x.productId), x.kg, x.price == null ? '' : x.price, x.price == null ? '' : Math.round(x.kg * x.price), x.buyer || '', x.note || '', x.byName || '', x.id]; }));
+  var stock = {};
+  trucks.forEach(function (t) { var k = t.warehouseId || ''; var r = stock[k] || (stock[k] = { name: k ? (wname(k) || 'Kho đã xoá') : 'Chưa gán kho', inKg: 0, outKg: 0 }); r.inKg += truckStats_(t).net; });
+  sales.forEach(function (x) { var k = x.warehouseId || ''; var r = stock[k] || (stock[k] = { name: k ? (wname(k) || 'Kho đã xoá') : 'Chưa gán kho', inKg: 0, outKg: 0 }); r.outKg += Number(x.kg) || 0; });
+  writeSheet_('Tồn kho', ['Kho', 'Đã nhập (kg)', 'Đã xuất (kg)', 'Tồn (kg)'], Object.keys(stock).map(function (k) { var r = stock[k]; return [r.name, round1_(r.inKg), round1_(r.outKg), round1_(r.inKg - r.outKg)]; }));
+  hedges.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  writeSheet_('Hedge', ['Ngày', 'Lệnh', 'Số lot', 'Tấn/lot', 'Tấn', 'Giá (USD/tấn)', 'Ghi chú', 'Người ghi'],
+    hedges.map(function (h) { return [fmtDate_(h.date), h.lots > 0 ? 'Bán' : 'Mua lại', Math.abs(h.lots), h.tonsPerLot, h.lots * h.tonsPerLot, h.price == null ? '' : h.price, h.note || '', h.byName || '']; }));
+  photos.sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
+  writeSheet_('Ảnh', ['Thời gian', 'Ngày xe', 'Xe', 'Người bán', 'Loại ảnh', 'Link Drive', 'Người chụp', 'Ghi chú'],
+    photos.map(function (p) { var t = truckById[p.truckId] || {}; return [fmtTime_(p.createdAt), fmtDate_(t.date), t.name || '', sname(t.sellerId), p.kind, p.driveUrl || '(chưa tải lên)', p.byName || '', p.note || '']; }));
+  writeSheet_('Kho', ['Tên', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(warehouses).map(function (k) { var x = warehouses[k]; return [x.name, x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
+  writeSheet_('Loại hàng', ['Tên', 'Quy ước', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(products).map(function (k) { var x = products[k]; var pr = presets.filter(function (p) { return p.id === x.presetId; })[0]; return [x.name, pr ? pr.name : '', x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
 
   writeSheet_('Quy ước', ['Tên', 'Mặc định', 'Nhập tạp', 'Tạp: cách trừ', 'Tạp chuẩn (%)', 'Tạp: mức trừ', 'Tạp: bảng', 'Độ: cách trừ', 'Độ chuẩn (%)', 'Độ: mức trừ', 'Độ: bảng', 'Bì', 'Ghi chú', 'Trạng thái', 'ID'],
     presets.map(function (p) {

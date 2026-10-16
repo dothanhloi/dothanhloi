@@ -30,19 +30,19 @@ export default function Login() {
     const next = pin + k;
     setPin(next);
     if (next.length === 4 && sel) {
-      setTimeout(() => {
-        if (login(sel, next)) { haptic('success'); router.replace('/'); }
+      setTimeout(async () => {
+        if (await login(sel, next)) { haptic('success'); router.replace('/'); }
         else { haptic('error'); setShake(true); setPin(''); setTimeout(() => setShake(false), 400); toast('Sai mã PIN', 'err'); }
       }, 80);
     }
   }
 
-  function createFirst() {
+  async function createFirst() {
     if (name.trim().length < 2) return toast('Nhập tên', 'err');
     if (!/^\d{4}$/.test(pin1)) return toast('PIN phải gồm 4 chữ số', 'err');
     if (pin1 !== pin2) return toast('PIN nhập lại không khớp', 'err');
-    const u = addUser({ name, pin: pin1, role: 'admin' });
-    login(u.id, pin1);
+    const u = await addUser({ name, pin: pin1, role: 'admin' });
+    await login(u.id, pin1);
     haptic('success');
     router.replace('/');
   }

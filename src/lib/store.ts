@@ -3,7 +3,8 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { PRESET_TEMPLATES, tableStats, truckStats } from './calc';
 import { COLS, ROWS, nowIso, uid } from './format';
-import type { DayPrice, Driver, HistoryKind, Payment, PaymentMethod, PresetSnapshot, QualityPreset, Seller, Settings, SyncRecord, Truck, User, WeighTable } from './types';
+import type { DayPrice, Driver, Hedge, HistoryKind, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, Truck, User, Warehouse, WeighTable } from './types';
+import { hashPin } from './security';
 
 export interface State {
   users: Record<string, User>;
@@ -12,6 +13,11 @@ export interface State {
   presets: Record<string, QualityPreset>;
   sellers: Record<string, Seller>;
   dayPrices: Record<string, DayPrice>;
+  warehouses: Record<string, Warehouse>;
+  products: Record<string, Product>;
+  sales: Record<string, Sale>;
+  hedges: Record<string, Hedge>;
+  photos: Record<string, Photo>;
   session: { userId: string | null };
   settings: Settings;
   hydrated: boolean;
@@ -20,17 +26,19 @@ export interface State {
 export interface Actions {
   setHydrated: (v: boolean) => void;
   // users
-  addUser: (d: { name: string; pin: string; role?: User['role'] }) => User;
+  addUser: (d: { name: string; pin: string; role?: User['role'] }) => Promise<User>;
+  setUserPin: (id: string, pin: string) => Promise<void>;
   updateUser: (id: string, patch: Partial<User>) => void;
   removeUser: (id: string) => void;
-  login: (id: string, pin: string) => boolean;
+  login: (id: string, pin: string) => Promise<boolean>;
+  migratePins: () => Promise<void>;
   logout: () => void;
   // drivers
   addDriver: (d: { name: string; phone?: string; plate?: string }) => Driver;
   updateDriver: (id: string, patch: Partial<Driver>) => void;
   removeDriver: (id: string) => void;
   // trucks
-  createTruck: (d: { date: string; driverId: string | null; sellerId?: string | null; weigherId: string | null; note?: string }) => Truck;
+  createTruck: (d: { date: string; driverId: string | null; sellerId?: string | null; weigherId: string | null; note?: string; warehouseId?: string | null; productId?: string | null; weighMode?: 'bags' | 'truck' }) => Truck;
   removeTruck: (id: string) => void;
   setCell: (truckId: string, tableIdx: number, col: number, row: number, value: number | null) => boolean;
   setField: (truckId: string, what: string, path: string[], value: unknown, kind?: HistoryKind) => boolean;
@@ -41,6 +49,25 @@ export interface Actions {
   lockAllTables: (truckId: string, locked: boolean) => void;
   addTable: (truckId: string) => void;
   removeLastTable: (truckId: string) => boolean;
+  // catalog: kho, loại hàng
+  addWarehouse: (d: { name: string; note?: string }) => Warehouse;
+  updateWarehouse: (id: string, patch: Partial<Warehouse>) => void;
+  removeWarehouse: (id: string) => void;
+  addProduct: (d: { name: string; presetId?: string | null; note?: string }) => Product;
+  updateProduct: (id: string, patch: Partial<Product>) => void;
+  removeProduct: (id: string) => void;
+  // xuất bán, hedge
+  addSale: (d: { date: string; warehouseId: string | null; productId: string | null; kg: number; price: number | null; buyer?: string; note?: string }) => Sale;
+  updateSale: (id: string, patch: Partial<Sale>) => void;
+  removeSale: (id: string) => void;
+  addHedge: (d: { date: string; lots: number; tonsPerLot: number; price: number | null; note?: string }) => Hedge;
+  removeHedge: (id: string) => void;
+  // ảnh
+  addPhoto: (d: { truckId: string; kind: Photo['kind']; localUri: string; note?: string }) => Photo;
+  updatePhoto: (id: string, patch: Partial<Photo>) => void;
+  removePhoto: (id: string) => void;
+  // cân xe tải
+  setWeighMode: (truckId: string, mode: 'bags' | 'truck') => void;
   // sellers (người bán)
   addSeller: (d: { name: string; phone?: string; address?: string; note?: string }) => Seller;
   updateSeller: (id: string, patch: Partial<Seller>) => void;
@@ -97,6 +124,11 @@ export const useStore = create<Store>()(
       presets: {},
       sellers: {},
       dayPrices: {},
+      warehouses: {},
+      products: {},
+      sales: {},
+      hedges: {},
+      photos: {},
       session: { userId: null },
       settings: defaultSettings(),
       hydrated: false,
@@ -104,10 +136,22 @@ export const useStore = create<Store>()(
       setHydrated: (v) => set({ hydrated: v }),
 
       /* ---------- users ---------- */
-      addUser: ({ name, pin, role }) => {
-        const u: User = { id: uid(), type: 'user', name: name.trim(), pin: String(pin), role: role || 'staff', createdAt: nowIso(), updatedAt: nowIso() };
+      addUser: async ({ name, pin, role }) => {
+        const pinHash = await hashPin(String(pin));
+        const u: User = { id: uid(), type: 'user', name: name.trim(), pin: '', pinHash, role: role || 'staff', createdAt: nowIso(), updatedAt: nowIso() };
         set((s) => ({ users: { ...s.users, [u.id]: u } }));
         return u;
+      },
+      setUserPin: async (id, pin) => {
+        const pinHash = await hashPin(String(pin));
+        get().updateUser(id, { pin: '', pinHash });
+      },
+      migratePins: async () => {
+        const list = Object.values(get().users).filter((u) => !u.deleted && !u.pinHash && u.pin);
+        for (const u of list) {
+          const pinHash = await hashPin(String(u.pin));
+          get().updateUser(u.id, { pin: '', pinHash });
+        }
       },
       updateUser: (id, patch) =>
         set((s) => (s.users[id] ? { users: { ...s.users, [id]: bump(s.users[id], patch) } } : {})),
@@ -119,9 +163,13 @@ export const useStore = create<Store>()(
             session: s.session.userId === id ? { userId: null } : s.session,
           };
         }),
-      login: (id, pin) => {
+      login: async (id, pin) => {
         const u = get().users[id];
-        if (!u || u.deleted || String(u.pin) !== String(pin)) return false;
+        if (!u || u.deleted) return false;
+        let ok = false;
+        if (u.pinHash) ok = (await hashPin(String(pin))) === u.pinHash;
+        else ok = String(u.pin) === String(pin);
+        if (!ok) return false;
         set({ session: { userId: id } });
         return true;
       },
@@ -139,7 +187,7 @@ export const useStore = create<Store>()(
         set((s) => (s.drivers[id] ? { drivers: { ...s.drivers, [id]: bump(s.drivers[id], { deleted: true }) } } : {})),
 
       /* ---------- trucks ---------- */
-      createTruck: ({ date, driverId, sellerId, weigherId, note }) => {
+      createTruck: ({ date, driverId, sellerId, weigherId, note, warehouseId, productId, weighMode }) => {
         const s = get();
         const user = s.users[s.session.userId || ''] || null;
         // kể cả xe đã xoá để số thứ tự không trùng
@@ -147,13 +195,18 @@ export const useStore = create<Store>()(
         const n = Math.max(1, Number(s.settings.tablesPerTruck) || 2);
         const tables: WeighTable[] = [];
         for (let i = 1; i <= n; i++) tables.push(newTable(i));
-        const dp = defaultPresetOf(s);
+        const prod = productId ? s.products[productId] : null;
+        const dp = (prod?.presetId && s.presets[prod.presetId] && !s.presets[prod.presetId].deleted ? s.presets[prod.presetId] : null) || defaultPresetOf(s);
         const dayPrice = s.dayPrices['dp-' + date];
         const price0 = dayPrice && !dayPrice.deleted && dayPrice.price != null ? Number(dayPrice.price) : null;
         const t: Truck = {
           id: uid(), type: 'truck', date, seq, name: 'Xe ' + seq,
           driverId: driverId || null,
           sellerId: sellerId || null,
+          warehouseId: warehouseId || null,
+          productId: productId || null,
+          weighMode: weighMode || 'bags',
+          truckWeigh: { grossIn: null, tareOut: null, bags: null },
           weigherId: weigherId || (user ? user.id : null),
           createdAt: nowIso(), createdBy: user ? user.id : null, createdByName: user ? user.name : '',
           updatedAt: nowIso(),
@@ -282,6 +335,61 @@ export const useStore = create<Store>()(
         return true;
       },
 
+      /* ---------- kho, loại hàng, xuất bán, hedge, ảnh ---------- */
+      addWarehouse: ({ name, note }) => {
+        const d: Warehouse = { id: uid(), type: 'warehouse', name: name.trim(), note: (note || '').trim(), createdAt: nowIso(), updatedAt: nowIso() };
+        set((s) => ({ warehouses: { ...s.warehouses, [d.id]: d } }));
+        return d;
+      },
+      updateWarehouse: (id, patch) => set((s) => (s.warehouses[id] ? { warehouses: { ...s.warehouses, [id]: bump(s.warehouses[id], patch) } } : {})),
+      removeWarehouse: (id) => set((s) => (s.warehouses[id] ? { warehouses: { ...s.warehouses, [id]: bump(s.warehouses[id], { deleted: true }) } } : {})),
+      addProduct: ({ name, presetId, note }) => {
+        const d: Product = { id: uid(), type: 'product', name: name.trim(), presetId: presetId || null, note: (note || '').trim(), createdAt: nowIso(), updatedAt: nowIso() };
+        set((s) => ({ products: { ...s.products, [d.id]: d } }));
+        return d;
+      },
+      updateProduct: (id, patch) => set((s) => (s.products[id] ? { products: { ...s.products, [id]: bump(s.products[id], patch) } } : {})),
+      removeProduct: (id) => set((s) => (s.products[id] ? { products: { ...s.products, [id]: bump(s.products[id], { deleted: true }) } } : {})),
+      addSale: ({ date, warehouseId, productId, kg, price, buyer, note }) => {
+        const s0 = get();
+        const user = s0.users[s0.session.userId || ''];
+        const d: Sale = { id: uid(), type: 'sale', date, warehouseId: warehouseId || null, productId: productId || null, kg: Number(kg) || 0, price: price == null ? null : Number(price), buyer: (buyer || '').trim(), note: (note || '').trim(), byName: user?.name || '', createdAt: nowIso(), updatedAt: nowIso() };
+        set((s) => ({ sales: { ...s.sales, [d.id]: d } }));
+        return d;
+      },
+      updateSale: (id, patch) => set((s) => (s.sales[id] ? { sales: { ...s.sales, [id]: bump(s.sales[id], patch) } } : {})),
+      removeSale: (id) => set((s) => (s.sales[id] ? { sales: { ...s.sales, [id]: bump(s.sales[id], { deleted: true }) } } : {})),
+      addHedge: ({ date, lots, tonsPerLot, price, note }) => {
+        const s0 = get();
+        const user = s0.users[s0.session.userId || ''];
+        const d: Hedge = { id: uid(), type: 'hedge', date, lots: Number(lots) || 0, tonsPerLot: Number(tonsPerLot) || 10, price: price == null ? null : Number(price), note: (note || '').trim(), byName: user?.name || '', createdAt: nowIso(), updatedAt: nowIso() };
+        set((s) => ({ hedges: { ...s.hedges, [d.id]: d } }));
+        return d;
+      },
+      removeHedge: (id) => set((s) => (s.hedges[id] ? { hedges: { ...s.hedges, [id]: bump(s.hedges[id], { deleted: true }) } } : {})),
+      addPhoto: ({ truckId, kind, localUri, note }) => {
+        const s0 = get();
+        const user = s0.users[s0.session.userId || ''];
+        const d: Photo = { id: uid(), type: 'photo', truckId, kind, note: (note || '').trim(), localUri, driveUrl: null, byName: user?.name || '', createdAt: nowIso(), updatedAt: nowIso() };
+        set((s) => ({ photos: { ...s.photos, [d.id]: d } }));
+        const t = s0.trucks[truckId];
+        if (t) get().patchTruck(truckId, {}, { what: 'Thêm ảnh', old: null, new: kind, kind: 'field' });
+        return d;
+      },
+      updatePhoto: (id, patch) => set((s) => (s.photos[id] ? { photos: { ...s.photos, [id]: bump(s.photos[id], patch) } } : {})),
+      removePhoto: (id) => {
+        const p = get().photos[id];
+        if (!p) return;
+        set((s) => ({ photos: { ...s.photos, [id]: bump(s.photos[id], { deleted: true }) } }));
+        if (get().trucks[p.truckId]) get().patchTruck(p.truckId, {}, { what: 'Xoá ảnh', old: p.kind, new: null, kind: 'field' });
+      },
+      setWeighMode: (truckId, mode) => {
+        const t = get().trucks[truckId];
+        if (!t || (t.weighMode || 'bags') === mode) return;
+        get().patchTruck(truckId, { weighMode: mode, truckWeigh: t.truckWeigh || { grossIn: null, tareOut: null, bags: null } },
+          { what: 'Kiểu cân', old: (t.weighMode || 'bags') === 'bags' ? 'Từng bao' : 'Cân xe tải', new: mode === 'bags' ? 'Từng bao' : 'Cân xe tải', kind: 'status' });
+      },
+
       /* ---------- sellers ---------- */
       addSeller: ({ name, phone, address, note }) => {
         const d: Seller = { id: uid(), type: 'seller', name: name.trim(), phone: (phone || '').trim(), address: (address || '').trim(), note: (note || '').trim(), createdAt: nowIso(), updatedAt: nowIso() };
@@ -377,27 +485,39 @@ export const useStore = create<Store>()(
         const presets = { ...s.presets };
         const sellers = { ...s.sellers };
         const dayPrices = { ...s.dayPrices };
+        const warehouses = { ...s.warehouses };
+        const products = { ...s.products };
+        const sales = { ...s.sales };
+        const hedges = { ...s.hedges };
+        const photos = { ...s.photos };
         let changed = 0;
         for (const r of records || []) {
           if (!r || !r.id || !r.type) continue;
-          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : r.type === 'seller' ? sellers : r.type === 'dayprice' ? dayPrices : null;
+          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : r.type === 'seller' ? sellers : r.type === 'dayprice' ? dayPrices : r.type === 'warehouse' ? warehouses : r.type === 'product' ? products : r.type === 'sale' ? sales : r.type === 'hedge' ? hedges : r.type === 'photo' ? photos : null;
           if (!bucket) continue;
           const local = bucket[r.id];
           if (!local || (r.updatedAt || '') > (local.updatedAt || '')) {
-            bucket[r.id] = r;
+            // ảnh: giữ đường dẫn file trên máy này
+            bucket[r.id] = r.type === 'photo' && local?.localUri ? { ...r, localUri: local.localUri } : r;
             changed++;
           }
         }
-        if (changed) set({ users, drivers, trucks, presets, sellers, dayPrices });
+        if (changed) set({ users, drivers, trucks, presets, sellers, dayPrices, warehouses, products, sales, hedges, photos });
         return changed;
       },
-      resetAll: () => set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, session: { userId: null }, settings: defaultSettings() }),
+      resetAll: () => set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, warehouses: {}, products: {}, sales: {}, hedges: {}, photos: {}, session: { userId: null }, settings: defaultSettings() }),
     }),
     {
       name: 'cancaphe.v1',
       storage: createJSONStorage(() => AsyncStorage),
-      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, session: s.session, settings: s.settings }),
-      merge: (persisted, current) => ({ ...current, ...(persisted as object), presets: (persisted as any)?.presets || {}, sellers: (persisted as any)?.sellers || {}, dayPrices: (persisted as any)?.dayPrices || {} }),
+      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, warehouses: s.warehouses, products: s.products, sales: s.sales, hedges: s.hedges, photos: s.photos, session: s.session, settings: s.settings }),
+      merge: (persisted, current) => {
+        const p = (persisted || {}) as any;
+        const keys = ['presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos'] as const;
+        const filled: Record<string, unknown> = {};
+        for (const k of keys) filled[k] = p[k] || {};
+        return { ...current, ...p, ...filled };
+      },
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
       },
@@ -450,7 +570,22 @@ export const datesWithTrucks = (s: Store): { date: string; count: number }[] => 
   for (const t of Object.values(s.trucks)) if (!t.deleted) m[t.date] = (m[t.date] || 0) + 1;
   return Object.keys(m).sort().reverse().map((date) => ({ date, count: m[date] }));
 };
-export const allRecords = (s: Store): SyncRecord[] => [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.presets || {}), ...Object.values(s.sellers || {}), ...Object.values(s.dayPrices || {}), ...Object.values(s.trucks)];
+export const allRecords = (s: Store): SyncRecord[] => {
+  const photos = Object.values(s.photos || {}).map(({ localUri: _l, ...rest }) => rest as Photo); // không gửi đường dẫn máy
+  return [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.presets || {}), ...Object.values(s.sellers || {}), ...Object.values(s.dayPrices || {}),
+    ...Object.values(s.warehouses || {}), ...Object.values(s.products || {}), ...Object.values(s.sales || {}), ...Object.values(s.hedges || {}), ...photos, ...Object.values(s.trucks)];
+};
+export const activeWarehouses = (s: Store): Warehouse[] => Object.values(s.warehouses || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+export const activeProducts = (s: Store): Product[] => Object.values(s.products || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+export const warehouseName = (s: Store, id: string | null | undefined): string => (id && s.warehouses?.[id]?.name) || '';
+export const productName = (s: Store, id: string | null | undefined): string => (id && s.products?.[id]?.name) || '';
+export const photosOfTruck = (s: Store, truckId: string): Photo[] => Object.values(s.photos || {}).filter((p) => !p.deleted && p.truckId === truckId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+/** Quản lý luôn thấy tiền; nhân viên tuỳ cài đặt */
+export const canSeeMoney = (s: Store): boolean => {
+  const u = selectCurrentUser(s);
+  if (!u) return false;
+  return u.role === 'admin' || s.settings.staffCanSeeMoney !== false;
+};
 export const activeSellers = (s: Store): Seller[] =>
   Object.values(s.sellers || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 export const sellerName = (s: Store, id: string | null | undefined): string => (id && s.sellers?.[id]?.name) || '';
