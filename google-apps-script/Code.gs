@@ -54,14 +54,14 @@ function doPost(e) {
     }
     if (action === 'sync' || action === 'push') {
       var incoming = Array.isArray(body.records) ? body.records : [];
-      var serverNow = new Date().toISOString();
+      var serverNow = nextServerNow_();
       var res = upsert_(incoming, serverNow);
       if (res.changed > 0) markDirty_();
       maybeRebuild_();
       var all = readAllWithMeta_();
       // trả về theo giờ máy chủ nhận (receivedAt) để máy khác gửi muộn vẫn được chuyển tiếp
       var out = body.since ? all.filter(function (x) { return x.receivedAt > body.since; }) : all;
-      return json_({ ok: true, upserted: res.changed, skipped: res.skipped, serverNow: serverNow, records: out.map(function (x) { return x.rec; }) });
+      return json_({ ok: true, upserted: res.changed, skipped: res.skipped, accepted: res.accepted, serverNow: serverNow, records: out.map(function (x) { return x.rec; }) });
     }
     if (action === 'rebuild') { rebuildViews_(); return json_({ ok: true }); }
     return json_({ ok: false, error: 'Hành động không hỗ trợ: ' + action });
@@ -88,6 +88,16 @@ function savePhoto_(body) {
   var file = ex.hasNext() ? ex.next() : folder.createFile(Utilities.newBlob(Utilities.base64Decode(body.base64), body.mime || 'image/jpeg', name));
   try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
   return 'https://drive.google.com/file/d/' + file.getId() + '/view';
+}
+
+/** Mốc giờ máy chủ tăng nghiêm ngặt (hai lần đồng bộ không bao giờ trùng mốc) */
+function nextServerNow_() {
+  var props = PropertiesService.getScriptProperties();
+  var last = props.getProperty('lastServerNow') || '';
+  var now = new Date().toISOString();
+  if (now <= last) now = new Date(new Date(last).getTime() + 1).toISOString();
+  props.setProperty('lastServerNow', now);
+  return now;
 }
 
 /* ---------------- lưu trữ ---------------- */
@@ -164,7 +174,22 @@ function unionById_(a, b) {
   out.sort(function (x, y) { return (x.at || '') < (y.at || '') ? -1 : 1; });
   return out;
 }
-/** Gộp xe: bản mới hơn thắng, nhưng sổ thanh toán và lịch sử được hợp nhất để không mất dữ liệu máy khác */
+function laterThan_(prev) {
+  var now = new Date().toISOString();
+  var floor = prev ? new Date(new Date(prev).getTime() + 1).toISOString() : '';
+  return now > floor ? now : floor;
+}
+function statusFromHistory_(history) {
+  for (var i = history.length - 1; i >= 0; i--) if (history[i] && history[i].what === 'Trạng thái xe') return history[i]['new'] === 'Đã xong' ? 'done' : 'weighing';
+  return null;
+}
+function paymentStatusOf_(t) {
+  var s = truckStats_(t);
+  if (s.amount === null || s.amount === undefined) return s.paid > 0 ? 'partial' : (t.payment && t.payment.status === 'paid' ? 'paid' : 'unpaid');
+  if (s.paid >= Math.round(s.amount) - 1) return 'paid';
+  return s.paid > 0 ? 'partial' : 'unpaid';
+}
+/** Gộp xe (giống merge.ts trong app): mới hơn thắng; thanh toán + lịch sử hợp nhất; "đã xong" và "đã xoá" không bị bản cũ ghi đè */
 function mergeTruck_(existing, incoming) {
   var remoteNewer = (incoming.updatedAt || '') > (existing.updatedAt || '');
   var base = remoteNewer ? incoming : existing;
@@ -172,23 +197,47 @@ function mergeTruck_(existing, incoming) {
   var hasPayArr = Array.isArray(base.payments) || Array.isArray(other.payments);
   var payments = hasPayArr ? unionById_(base.payments, other.payments) : null;
   var history = unionById_(base.history, other.history);
-  var grew = (hasPayArr && payments.length !== (base.payments || []).length) || history.length !== (base.history || []).length;
-  if (!remoteNewer && !grew) return null; // không có gì mới
+  var payGrew = hasPayArr && payments.length !== (base.payments || []).length;
+  var histGrew = history.length !== (base.history || []).length;
+  var st = statusFromHistory_(history) || base.status;
+  var statusChanged = st !== base.status;
+  var deleted = !!(base.deleted || other.deleted);
+  var deletedChanged = deleted !== !!base.deleted;
+  if (!remoteNewer && !payGrew && !histGrew && !statusChanged && !deletedChanged) return null; // không có gì mới
+  if (remoteNewer && !payGrew && !histGrew && !statusChanged && !deletedChanged) return incoming;
   var merged = JSON.parse(JSON.stringify(base));
   merged.history = history;
   if (hasPayArr) {
     merged.payments = payments;
     var paid = 0; payments.forEach(function (x) { paid += Number(x.amount) || 0; });
     merged.payment = merged.payment || {}; merged.payment.paidAmount = paid;
+    merged.payment.status = paymentStatusOf_(merged);
   }
-  if (grew) merged.updatedAt = new Date().toISOString();
+  if (statusChanged) {
+    var src = st === 'done' ? (base.status === 'done' ? base : (other.status === 'done' ? other : base)) : null;
+    if (st === 'done') { merged.status = 'done'; merged.doneAt = src.doneAt; merged.doneBy = src.doneBy; merged.doneByName = src.doneByName; (merged.tables || []).forEach(function (tb) { tb.locked = true; }); }
+    else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; }
+  }
+  if (deleted) merged.deleted = true;
+  merged.updatedAt = laterThan_(base.updatedAt);
   return merged;
 }
+/** Bản ghi thường: mới hơn thắng, "đã xoá" là dính */
+function mergeSimple_(existing, incoming) {
+  var remoteNewer = (incoming.updatedAt || '') > (existing.updatedAt || '');
+  var base = remoteNewer ? incoming : existing;
+  var deleted = !!(existing.deleted || incoming.deleted);
+  if (deleted && !base.deleted) { var m = JSON.parse(JSON.stringify(base)); m.deleted = true; m.updatedAt = laterThan_(base.updatedAt); return m; }
+  return remoteNewer ? incoming : null;
+}
 
-/** Ghi bản ghi mới hơn (xe: gộp). Trả về {changed, skipped} */
+/** Ghi bản ghi mới hơn (xe: gộp). Trả về {changed, skipped, accepted} */
 function upsert_(records, serverNow) {
-  var result = { changed: 0, skipped: [] };
+  var result = { changed: 0, skipped: [], accepted: [] };
   if (!records.length) return result;
+  // cùng id xuất hiện nhiều lần trong một lần gửi → lấy bản cuối
+  var byId = {}; records.forEach(function (r) { if (r && r.id) byId[r.id] = r; });
+  records = Object.keys(byId).map(function (k) { return byId[k]; });
   var sh = dataSheet_();
   var last = sh.getLastRow();
   var index = {}; // id -> {row, updatedAt}
@@ -201,18 +250,19 @@ function upsert_(records, serverNow) {
     var ex = index[r.id];
     var toWrite = null;
     if (ex) {
-      if (r.type === 'truck') {
-        var existing = null;
-        try { existing = JSON.parse(joinJson_(ex.raw)); } catch (e) {}
-        toWrite = existing ? mergeTruck_(existing, r) : r;
-      } else if ((r.updatedAt || '') > ex.updatedAt) toWrite = r;
+      var existing = null;
+      try { existing = JSON.parse(joinJson_(ex.raw)); } catch (e) {}
+      if (!existing) toWrite = r;
+      else if (r.type === 'truck') toWrite = mergeTruck_(existing, r);
+      else toWrite = mergeSimple_(existing, r);
     } else toWrite = r;
-    if (!toWrite) continue;
+    if (!toWrite) { result.accepted.push(r.id); continue; } // máy chủ đã có bản tương đương hoặc mới hơn
     var parts = splitJson_(JSON.stringify(toWrite));
     if (!parts) { result.skipped.push(r.id); continue; }
     var rowVals = [toWrite.type, toWrite.id, toWrite.updatedAt || '', toWrite.deleted ? 'TRUE' : ''].concat(parts).concat([serverNow]);
     if (ex) sh.getRange(ex.row, 1, 1, DATA_COLS).setValues([rowVals]);
-    else { appends.push(rowVals); index[r.id] = { row: -1, updatedAt: r.updatedAt || '' }; }
+    else appends.push(rowVals);
+    result.accepted.push(r.id);
     result.changed++;
   }
   if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, DATA_COLS).setValues(appends);
@@ -357,6 +407,7 @@ function rebuildViews_() {
   var h2 = ['Ngày', 'Xe', 'Bảng', 'Cột', 'Bao', 'Khối lượng (kg)', 'Nhân viên cân', 'Tài xế', 'ID xe'];
   var r2 = [];
   trucks.forEach(function (t) {
+    if ((t.weighMode || 'bags') === 'truck') return;
     (t.tables || []).forEach(function (tb) {
       (tb.cells || []).forEach(function (col, ci) {
         col.forEach(function (v, ri) {

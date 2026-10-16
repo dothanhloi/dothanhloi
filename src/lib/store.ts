@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { appStorage } from './storage';
-import { mergeTruck } from './merge';
+import { laterThan, mergeSimple, mergeTruck } from './merge';
 import { PRESET_TEMPLATES, tableStats, truckStats } from './calc';
 import { COLS, ROWS, nowIso, uid } from './format';
-import type { DayPrice, Driver, Hedge, HistoryKind, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, Truck, User, Warehouse, WeighTable } from './types';
+import type { DayPrice, Driver, Hedge, HistoryKind, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, TeamConfig, Truck, User, Warehouse, WeighTable } from './types';
 import { hashPin } from './security';
 
 export interface State {
@@ -19,6 +19,7 @@ export interface State {
   sales: Record<string, Sale>;
   hedges: Record<string, Hedge>;
   photos: Record<string, Photo>;
+  configs: Record<string, TeamConfig>;
   session: { userId: string | null };
   settings: Settings;
   hydrated: boolean;
@@ -89,6 +90,7 @@ export interface Actions {
   applyPreset: (truckId: string, presetId: string) => void;
   // settings
   setSettings: (patch: Partial<Settings>) => void;
+  setTeamConfig: (patch: Partial<Omit<TeamConfig, 'id' | 'type' | 'updatedAt'>>) => void;
   // sync
   mergeRecords: (records: SyncRecord[], opts?: { markPending?: boolean }) => number;
   markPending: (ids: string[]) => void;
@@ -117,12 +119,12 @@ function newTable(index: number): WeighTable {
 
 /** Tạo bản sao nông của record + updatedAt */
 function bump<T extends { updatedAt: string }>(r: T, patch: Partial<T> = {}): T {
-  return { ...r, ...patch, updatedAt: nowIso() };
+  return { ...r, ...patch, updatedAt: laterThan(r.updatedAt) };
 }
 
 /** true trong lúc mergeRecords áp dữ liệu máy chủ → không đánh dấu chờ đẩy */
 let applyingRemote = false;
-export const BUCKETS = ['users', 'drivers', 'trucks', 'presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos'] as const;
+export const BUCKETS = ['users', 'drivers', 'trucks', 'presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos', 'configs'] as const;
 
 export const useStore = create<Store>()(
   persist(
@@ -138,6 +140,7 @@ export const useStore = create<Store>()(
       sales: {},
       hedges: {},
       photos: {},
+      configs: {},
       session: { userId: null },
       settings: defaultSettings(),
       hydrated: false,
@@ -202,7 +205,7 @@ export const useStore = create<Store>()(
         const user = s.users[s.session.userId || ''] || null;
         // kể cả xe đã xoá để số thứ tự không trùng
         const seq = Object.values(s.trucks).filter((t) => t.date === date).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
-        const n = Math.max(1, Number(s.settings.tablesPerTruck) || 2);
+        const n = Math.max(1, Number(teamConfigOf(s).tablesPerTruck) || 2);
         const tables: WeighTable[] = [];
         for (let i = 1; i <= n; i++) tables.push(newTable(i));
         const prod = productId ? s.products[productId] : null;
@@ -440,7 +443,7 @@ export const useStore = create<Store>()(
         const s = get();
         const user = s.users[s.session.userId || ''];
         const id = 'dp-' + date;
-        const d: DayPrice = { id, type: 'dayprice', date, price: price == null ? null : Number(price), note: (note || '').trim(), byName: user?.name || '', updatedAt: nowIso() };
+        const d: DayPrice = { id, type: 'dayprice', date, price: price == null ? null : Number(price), note: (note || '').trim(), byName: user?.name || '', updatedAt: laterThan(s.dayPrices[id]?.updatedAt) };
         set({ dayPrices: { ...s.dayPrices, [id]: d } });
       },
 
@@ -467,6 +470,7 @@ export const useStore = create<Store>()(
       ensureDefaultPreset: () => {
         const s = get();
         if (Object.values(s.presets).some((p) => !p.deleted)) return;
+        if (s.settings.sheetUrl && !s.settings.lastSync) return; // chờ nhận quy ước từ Google Sheets trước
         const tpl = PRESET_TEMPLATES[0];
         const base = tpl.make();
         // giữ các giá trị mặc định cũ (độ chuẩn, bì) nếu người dùng đã chỉnh
@@ -482,6 +486,13 @@ export const useStore = create<Store>()(
         const old = t.preset?.name || 'Mặc định';
         get().patchTruck(truckId, { preset: snapshotOf(p) }, { what: 'Quy ước tạp độ', old, new: p.name, kind: 'field' });
       },
+
+      /* ---------- cài đặt dùng chung ---------- */
+      setTeamConfig: (patch) => set((s) => {
+        const cur = teamConfigOf(s);
+        const next: TeamConfig = { ...cur, ...patch, company: { ...cur.company, ...(patch.company || {}) }, updatedAt: laterThan(cur.updatedAt) };
+        return { configs: { ...s.configs, config: next } };
+      }),
 
       /* ---------- settings ---------- */
       setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
@@ -503,10 +514,11 @@ export const useStore = create<Store>()(
         const sales = { ...s.sales };
         const hedges = { ...s.hedges };
         const photos = { ...s.photos };
+        const configs = { ...s.configs };
         let changed = 0;
         for (const r of records || []) {
           if (!r || !r.id || !r.type) continue;
-          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : r.type === 'seller' ? sellers : r.type === 'dayprice' ? dayPrices : r.type === 'warehouse' ? warehouses : r.type === 'product' ? products : r.type === 'sale' ? sales : r.type === 'hedge' ? hedges : r.type === 'photo' ? photos : null;
+          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : r.type === 'seller' ? sellers : r.type === 'dayprice' ? dayPrices : r.type === 'warehouse' ? warehouses : r.type === 'product' ? products : r.type === 'sale' ? sales : r.type === 'hedge' ? hedges : r.type === 'photo' ? photos : r.type === 'config' ? configs : null;
           if (!bucket) continue;
           const local = bucket[r.id];
           if (r.type === 'truck' && local) {
@@ -514,21 +526,27 @@ export const useStore = create<Store>()(
             if (merged !== local) { bucket[r.id] = merged; changed++; if (merged !== r) toPush.push(r.id); } // bản gộp có phần máy chủ chưa có
             continue;
           }
-          if (!local || (r.updatedAt || '') > (local.updatedAt || '')) {
-            // ảnh: giữ đường dẫn file trên máy này
-            bucket[r.id] = r.type === 'photo' && local?.localUri ? { ...r, localUri: local.localUri } : r;
-            changed++;
-          }
+          if (!local) { bucket[r.id] = r; changed++; continue; }
+          const merged = mergeSimple(local as any, r as any);
+          if (merged === local) continue;
+          // ảnh: giữ đường dẫn file trên máy này
+          bucket[r.id] = r.type === 'photo' && (local as Photo).localUri ? { ...merged, localUri: (local as Photo).localUri } : merged;
+          changed++;
+          if (merged !== r) toPush.push(r.id); // bản gộp (xoá dính) máy chủ chưa có
         }
+        // nhiều quy ước cùng "mặc định" (mỗi máy tự tạo một cái): giữ cái mới nhất
+        const defaults = Object.values(presets).filter((p) => !p.deleted && p.isDefault).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        for (const p of defaults.slice(1)) { presets[p.id] = bump(p, { isDefault: false }); changed++; toPush.push(p.id); }
         // hai máy cùng tạo "Xe N" trong ngày khi mất mạng → đánh lại số cho xe tạo sau
         const byDate: Record<string, Truck[]> = {};
         for (const t of Object.values(trucks)) if (!t.deleted) (byDate[t.date] || (byDate[t.date] = [])).push(t);
         for (const list of Object.values(byDate)) {
-          list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+          // xe đã xong (đã in phiếu) giữ số; chỉ đánh lại số xe đang cân, theo thứ tự tạo
+          list.sort((a, b) => (a.status === 'done' ? 0 : 1) - (b.status === 'done' ? 0 : 1) || a.createdAt.localeCompare(b.createdAt));
           const used = new Set<number>();
           let maxSeq = 0;
           for (const t of list) {
-            if (used.has(t.seq)) {
+            if (used.has(t.seq) && t.status !== 'done') {
               const seq = maxSeq + 1;
               const isDefaultName = t.name === 'Xe ' + t.seq;
               trucks[t.id] = bump(t, { seq, name: isDefaultName ? 'Xe ' + seq : t.name, history: [...t.history, { id: uid(), at: nowIso(), by: null, byName: 'Hệ thống', what: 'Đánh lại số xe (trùng khi đồng bộ)', old: t.seq, new: seq, kind: 'status' as HistoryKind }] });
@@ -541,25 +559,30 @@ export const useStore = create<Store>()(
           try {
             const pending = { ...s.pending };
             for (const id of toPush) pending[id] = true;
-            set({ users, drivers, trucks, presets, sellers, dayPrices, warehouses, products, sales, hedges, photos, pending });
+            set({ users, drivers, trucks, presets, sellers, dayPrices, warehouses, products, sales, hedges, photos, configs, pending });
           } finally { applyingRemote = false; }
         }
         return changed;
       },
       resetAll: () => {
-        set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, warehouses: {}, products: {}, sales: {}, hedges: {}, photos: {}, session: { userId: null }, settings: defaultSettings() });
-        get().ensureDefaultPreset();
+        set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, warehouses: {}, products: {}, sales: {}, hedges: {}, photos: {}, configs: {}, pending: {}, session: { userId: null }, settings: defaultSettings() });
       },
     }),
     {
       name: 'cancaphe.v1',
       storage: createJSONStorage(() => appStorage),
-      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, warehouses: s.warehouses, products: s.products, sales: s.sales, hedges: s.hedges, photos: s.photos, session: s.session, settings: s.settings, pending: s.pending }),
+      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, warehouses: s.warehouses, products: s.products, sales: s.sales, hedges: s.hedges, photos: s.photos, configs: s.configs, session: s.session, settings: s.settings, pending: s.pending }),
       merge: (persisted, current) => {
         const p = (persisted || {}) as any;
-        const keys = ['presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos', 'pending'] as const;
+        const keys = ['presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos', 'configs', 'pending'] as const;
         const filled: Record<string, unknown> = {};
         for (const k of keys) filled[k] = p[k] || {};
+        // nâng cấp từ bản cũ (chưa có hàng chờ): đẩy những gì đổi sau lần đẩy cuối
+        if (p.pending === undefined && p.settings?.lastPush) {
+          const pend: Record<string, true> = {};
+          for (const k of BUCKETS) for (const r of Object.values((p[k] || {}) as Record<string, { id: string; updatedAt?: string }>)) if ((r.updatedAt || '') > p.settings.lastPush) pend[r.id] = true;
+          filled.pending = pend;
+        }
         return { ...current, ...p, ...filled, settings: { ...current.settings, ...(p.settings || {}) }, session: { ...current.session, ...(p.session || {}) } };
       },
       onRehydrateStorage: () => (state) => {
@@ -633,6 +656,18 @@ export const allRecords = (s: Store): SyncRecord[] => {
   return [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.presets || {}), ...Object.values(s.sellers || {}), ...Object.values(s.dayPrices || {}),
     ...Object.values(s.warehouses || {}), ...Object.values(s.products || {}), ...Object.values(s.sales || {}), ...Object.values(s.hedges || {}), ...photos, ...Object.values(s.trucks)];
 };
+export function teamConfigOf(s: Pick<Store, 'configs' | 'settings'>): TeamConfig {
+  const c = s.configs?.config;
+  if (c && !c.deleted) return { ...c, company: c.company || { name: '', phone: '', address: '', footer: '' } };
+  // chưa có bản dùng chung: lấy từ cài đặt máy (bản cũ)
+  return {
+    id: 'config', type: 'config', updatedAt: '',
+    staffCanSeeMoney: s.settings.staffCanSeeMoney !== false,
+    debtDueDays: Number(s.settings.debtDueDays ?? 7),
+    tablesPerTruck: Number(s.settings.tablesPerTruck) || 2,
+    company: s.settings.company || { name: '', phone: '', address: '', footer: '' },
+  };
+}
 export const activeWarehouses = (s: Store): Warehouse[] => Object.values(s.warehouses || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 export const activeProducts = (s: Store): Product[] => Object.values(s.products || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 export const warehouseName = (s: Store, id: string | null | undefined): string => (id && s.warehouses?.[id]?.name) || '';
@@ -642,7 +677,7 @@ export const photosOfTruck = (s: Store, truckId: string): Photo[] => Object.valu
 export const canSeeMoney = (s: Store): boolean => {
   const u = selectCurrentUser(s);
   if (!u) return false;
-  return u.role === 'admin' || s.settings.staffCanSeeMoney !== false;
+  return u.role === 'admin' || teamConfigOf(s).staffCanSeeMoney;
 };
 export const activeSellers = (s: Store): Seller[] =>
   Object.values(s.sellers || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));

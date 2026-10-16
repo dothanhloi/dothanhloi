@@ -11,6 +11,7 @@ const listeners = new Set<Listener>();
 let status: SyncStatus = { state: 'idle', message: '', at: null };
 let timer: ReturnType<typeof setTimeout> | null = null;
 let busy = false;
+let rerun = false;
 
 function emit(next: Partial<SyncStatus>) {
   status = { ...status, ...next };
@@ -35,13 +36,13 @@ async function request(u: string, payload: unknown) {
     throw new Error('Phản hồi không phải JSON. Kiểm tra link Apps Script (phải triển khai dạng Web App, quyền "Anyone").');
   }
   if (!data.ok) throw new Error(data.error || 'Lỗi không xác định từ Google Sheets');
-  return data as { ok: true; records: SyncRecord[]; serverNow?: string; skipped?: string[] };
+  return data as { ok: true; records: SyncRecord[]; serverNow?: string; skipped?: string[]; accepted?: string[] };
 }
 
 export async function syncNow(opts: { full?: boolean } = {}) {
   const u = url();
   if (!u) { emit({ state: 'off', message: 'Chưa liên kết Google Sheets' }); return { ok: false as const, off: true }; }
-  if (busy) return { ok: false as const, busy: true };
+  if (busy) { rerun = true; return { ok: false as const, busy: true }; }
   busy = true;
   emit({ state: 'syncing', message: 'Đang đồng bộ...' });
   try {
@@ -53,7 +54,8 @@ export async function syncNow(opts: { full?: boolean } = {}) {
     for (const r of records) sentRefs.set(r.id, findRecord(st, r.id));
     const data = await request(u, { action: 'sync', records, since: opts.full ? null : st.settings.lastSync });
     const after = useStore.getState();
-    const done = [...sentRefs.keys()].filter((id) => findRecord(after, id) === sentRefs.get(id));
+    const accepted = new Set<string>(data.accepted || [...sentRefs.keys()]);
+    const done = [...sentRefs.keys()].filter((id) => accepted.has(id) && findRecord(after, id) === sentRefs.get(id));
     after.clearPending(done);
     const changed = useStore.getState().mergeRecords(data.records || []);
     // lastSync dùng giờ máy chủ (receivedAt) để không bỏ sót bản ghi máy khác gửi muộn
@@ -68,6 +70,7 @@ export async function syncNow(opts: { full?: boolean } = {}) {
     return { ok: false as const, error: message };
   } finally {
     busy = false;
+    if (rerun) { rerun = false; scheduleSync(); }
   }
 }
 

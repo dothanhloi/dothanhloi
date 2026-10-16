@@ -25,7 +25,7 @@ export default function History() {
   const users = useStore((s) => s.users);
   const [kind, setKind] = useState<HistoryKind | 'all'>('all');
   const money = useStore(canSeeMoney);
-  const isMoney = (h: HistoryEntry) => /giá|thanh toán|tiền/i.test(h.what);
+  const isMoney = (h: HistoryEntry) => /giá|thanh toán|tiền|\bTT\b/i.test(h.what);
   const list = useMemo(() => (t ? [...t.history].reverse().filter((h) => (kind === 'all' || h.kind === kind) && (money || !isMoney(h))) : []), [t, kind, money]);
 
   const resolveName = (h: HistoryEntry) => (h.by && users[h.by]?.name) || h.byName;

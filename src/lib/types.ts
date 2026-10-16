@@ -93,7 +93,7 @@ export interface Truck {
   deleted?: boolean;
 }
 
-export type SyncRecord = User | Driver | Truck | QualityPreset | Seller | DayPrice | Warehouse | Product | Sale | Hedge | Photo;
+export type SyncRecord = User | Driver | Truck | QualityPreset | Seller | DayPrice | Warehouse | Product | Sale | Hedge | Photo | TeamConfig;
 
 export interface Settings {
   sheetUrl: string;
@@ -273,3 +273,15 @@ export interface Photo {
 }
 
 export type WeighMode = 'bags' | 'truck';
+
+/** Cài đặt dùng chung cả đội, đồng bộ qua Google Sheets (id cố định 'config') */
+export interface TeamConfig {
+  id: 'config';
+  type: 'config';
+  staffCanSeeMoney: boolean;
+  debtDueDays: number;
+  tablesPerTruck: number;
+  company: Company;
+  updatedAt: string;
+  deleted?: boolean;
+}

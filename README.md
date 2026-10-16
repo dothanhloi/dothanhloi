@@ -132,7 +132,11 @@ Bản mới có tải ảnh lên Google Drive nên khi dán lại mã, Google s�
 
 Tuỳ chọn: trong trình soạn thảo Apps Script chọn hàm `setupTrigger` và bấm Chạy một lần. Các trang dễ đọc (Xe, Công nợ, Tồn kho...) sẽ được dựng lại mỗi 10 phút khi có thay đổi, ngoài việc tự dựng lại tối đa 2 phút một lần mỗi khi có máy đồng bộ.
 
-Cách đồng bộ: mỗi máy gửi các bản ghi thay đổi, máy chủ ghi theo giờ nhận và trả về những gì máy đó chưa có. Xe được **gộp theo trường**: bản mới hơn thắng số cân và thông tin, còn sổ thanh toán và lịch sử sửa được hợp nhất từ cả hai máy nên không mất lần trả tiền ghi ở máy khác. Hai máy cùng tạo "Xe 3" khi mất mạng: xe tạo sau được đánh lại số và ghi lịch sử.
+Máy phụ (nhân viên) lần đầu mở app: ở màn hình đăng nhập bấm **Máy phụ? Liên kết Google Sheets có sẵn**, dán link, app tải danh sách nhân viên về rồi chọn tên để đăng nhập. Không cần tạo tài khoản quản lý mới trên từng máy.
+
+Cài đặt dùng chung (nhân viên thấy tiền hay không, số ngày nhắc nợ, số bảng mặc định, thông tin trên phiếu cân) được đồng bộ cho mọi máy.
+
+Cách đồng bộ: mỗi máy giữ hàng chờ các bản ghi đã đổi (không phụ thuộc đồng hồ máy), máy chủ ghi theo giờ nhận và trả về những gì máy đó chưa có. Xe được **gộp theo trường**: bản mới hơn thắng số cân và thông tin, còn sổ thanh toán và lịch sử sửa được hợp nhất từ cả hai máy nên không mất lần trả tiền ghi ở máy khác. Xe đã bấm **Xong** không bị máy khác chưa cập nhật "mở lại"; bản ghi đã xoá không bị hồi sinh bởi sửa đổi cũ. Hai máy cùng tạo "Xe 3" khi mất mạng: xe đang cân tạo sau được đánh lại số (xe đã xong giữ số vì đã in phiếu).
 
 App tự đồng bộ 3 giây sau mỗi thay đổi khi có mạng; không có mạng vẫn cân bình thường, sẽ gửi khi có mạng lại. Dữ liệu gộp theo thời gian cập nhật nên nhiều máy cùng dùng không ghi đè lẫn nhau (trừ khi hai máy cùng sửa đúng một xe cùng lúc – máy sửa sau thắng).
 

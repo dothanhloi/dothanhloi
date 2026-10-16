@@ -5,6 +5,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Btn, Card, Field, Input, haptic } from '../components/ui';
 import { activeUsers, useStore } from '../lib/store';
+import { syncNow, testSheetUrl } from '../lib/sync';
 import { C, shadow } from '../lib/theme';
 import { toast } from '../lib/toast';
 
@@ -22,6 +23,27 @@ export default function Login() {
   const [name, setName] = useState('');
   const [pin1, setPin1] = useState('');
   const [pin2, setPin2] = useState('');
+  const [linkMode, setLinkMode] = useState(false);
+  const [url, setUrl] = useState('');
+  const [linking, setLinking] = useState(false);
+  const setSettings = useStore((s) => s.setSettings);
+
+  async function linkSheet() {
+    const u = url.trim();
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(u)) return toast('Link phải có dạng https://script.google.com/macros/s/.../exec', 'err', 3500);
+    setLinking(true);
+    try {
+      await testSheetUrl(u);
+      setSettings({ sheetUrl: u, lastPush: null, lastSync: null });
+      const r = await syncNow({ full: true });
+      if (!r.ok) throw new Error('error' in r ? r.error : 'Không đồng bộ được');
+      const n = activeUsers(useStore.getState()).length;
+      if (n === 0) toast('Đã liên kết nhưng chưa có nhân viên nào trên Google Sheets. Hãy tạo tài khoản quản lý.', 'info', 4000);
+      else { haptic('success'); toast(`Đã nhận ${n} tài khoản. Chọn tên để đăng nhập.`, 'ok', 3000); }
+      setLinkMode(false);
+    } catch (e: any) { toast('Không kết nối được: ' + (e?.message || e), 'err', 4000); }
+    finally { setLinking(false); }
+  }
 
   function press(k: string) {
     haptic();
@@ -51,9 +73,19 @@ export default function Login() {
     <ScrollView contentContainerStyle={[st.wrap, { paddingTop: insets.top + 36, paddingBottom: insets.bottom + 24 }]} keyboardShouldPersistTaps="handled">
       <View style={st.logo}><Ionicons name="scale" size={44} color="#fff" /></View>
       <Text style={st.h1}>Cân Cà Phê</Text>
-      {users.length === 0 ? (
+      {users.length === 0 && linkMode ? (
+        <>
+          <Text style={st.p}>Dán link Google Apps Script mà quản lý đã chia sẻ. App sẽ tải danh sách nhân viên và dữ liệu về máy này.</Text>
+          <Card style={{ width: '100%' }}>
+            <Field label="Link Apps Script (…/exec)"><Input value={url} onChangeText={setUrl} placeholder="https://script.google.com/macros/s/.../exec" autoCapitalize="none" autoCorrect={false} keyboardType="url" multiline style={{ fontSize: 14, minHeight: 70 }} /></Field>
+            <Btn title={linking ? 'Đang kết nối...' : 'Liên kết & tải dữ liệu'} onPress={linkSheet} disabled={linking} />
+            <Btn title="Quay lại" kind="ghost" onPress={() => setLinkMode(false)} style={{ marginTop: 8 }} />
+          </Card>
+        </>
+      ) : users.length === 0 ? (
         <>
           <Text style={st.p}>Lần đầu sử dụng: tạo tài khoản quản lý. Sau đó bạn có thể thêm nhân viên trong phần Cài đặt.</Text>
+          <Btn title="Máy phụ? Liên kết Google Sheets có sẵn" kind="secondary" icon="logo-google" onPress={() => setLinkMode(true)} style={{ marginBottom: 12 }} />
           <Card style={{ width: '100%' }}>
             <Field label="Tên của bạn"><Input value={name} onChangeText={setName} placeholder="VD: Thành Lợi" autoFocus /></Field>
             <Field label="Mã PIN (4 số)"><Input value={pin1} onChangeText={setPin1} keyboardType="number-pad" maxLength={4} secureTextEntry placeholder="••••" /></Field>

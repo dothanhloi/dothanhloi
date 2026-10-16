@@ -9,7 +9,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Btn, Card, ConfirmSheet, Field, Input, InputSheet, Pill, Sheet, Switch, TopBar, haptic } from '../../components/ui';
 import { fmtDateTime, todayStr } from '../../lib/format';
-import { activeDrivers, activePresets, activeProducts, activeSellers, activeUsers, activeWarehouses, defaultPresetOf, selectCurrentUser, useStore } from '../../lib/store';
+import { activeDrivers, activePresets, activeProducts, activeSellers, activeUsers, activeWarehouses, defaultPresetOf, selectCurrentUser, teamConfigOf, useStore } from '../../lib/store';
 import { exportPayload, recordsFromPayload, runAutoBackup } from '../../lib/backup';
 import { getSyncStatus, onSyncStatus, SyncStatus } from '../../lib/sync';
 import { C, shadow } from '../../lib/theme';
@@ -39,6 +39,7 @@ export default function Settings() {
   useEffect(() => onSyncStatus(setSync), []);
   const [edit, setEdit] = useState<null | 'tablesPerTruck' | 'debtDueDays'>(null);
   const defaultPreset = defaultPresetOf(store);
+  const cfg = teamConfigOf(store);
   const presetCount = activePresets(store).length;
   const [askReset, setAskReset] = useState(false);
   const [askImport, setAskImport] = useState<SyncRecord[] | null>(null);
@@ -102,19 +103,19 @@ export default function Settings() {
 
         {isAdmin ? (
           <Card title="Phân quyền & nhắc việc">
-            <Row icon="eye-off" color={C.red} title="Nhân viên thấy giá và tiền" sub={store.settings.staffCanSeeMoney === false ? 'Tắt: nhân viên chỉ thấy kg, không thấy giá, thành tiền, công nợ' : 'Bật: nhân viên thấy đầy đủ'}
-              right={<Switch on={store.settings.staffCanSeeMoney !== false} onChange={(v) => store.setSettings({ staffCanSeeMoney: v })} />} />
-            <Row icon="notifications" color={C.orange} title={labels.debtDueDays} sub={`${store.settings.debtDueDays ?? 7} ngày kể từ khi xong xe`} onPress={() => setEdit('debtDueDays')} />
+            <Row icon="eye-off" color={C.red} title="Nhân viên thấy giá và tiền" sub={!cfg.staffCanSeeMoney ? 'Tắt: nhân viên chỉ thấy kg, không thấy giá, thành tiền, công nợ (áp dụng mọi máy sau khi đồng bộ)' : 'Bật: nhân viên thấy đầy đủ'}
+              right={<Switch on={cfg.staffCanSeeMoney} onChange={(v) => store.setTeamConfig({ staffCanSeeMoney: v })} />} />
+            <Row icon="notifications" color={C.orange} title={labels.debtDueDays} sub={`${cfg.debtDueDays} ngày kể từ khi xong xe`} onPress={() => setEdit('debtDueDays')} />
           </Card>
         ) : null}
 
         <Card title="Thông tin trên phiếu cân">
-          <Row icon="business" color={C.blue} title={store.settings.company?.name || 'Tên cơ sở / công ty'} sub={[store.settings.company?.address, store.settings.company?.phone].filter(Boolean).join(' · ') || 'Bấm để nhập tên, địa chỉ, SĐT in trên phiếu cân'} onPress={() => setCompany({ name: '', phone: '', address: '', footer: '', ...(store.settings.company || {}) })} />
+          <Row icon="business" color={C.blue} title={cfg.company.name || 'Tên cơ sở / công ty'} sub={[cfg.company.address, cfg.company.phone].filter(Boolean).join(' · ') || 'Bấm để nhập tên, địa chỉ, SĐT in trên phiếu cân'} onPress={() => setCompany({ ...cfg.company })} />
         </Card>
 
         <Card title="Mặc định khi tạo xe">
           <Row icon="options" color={C.blue} title="Quy ước tạp độ" sub={defaultPreset ? `Mặc định: ${defaultPreset.name} · ${presetCount} quy ước` : 'Chưa có quy ước'} onPress={() => router.push('/settings/presets')} />
-          <Row icon="grid" color={C.green} title={labels.tablesPerTruck} sub={`${store.settings.tablesPerTruck} bảng × 25 bao`} onPress={() => setEdit('tablesPerTruck')} />
+          <Row icon="grid" color={C.green} title={labels.tablesPerTruck} sub={`${cfg.tablesPerTruck} bảng × 25 bao`} onPress={() => setEdit('tablesPerTruck')} />
         </Card>
 
         <Card title="Dữ liệu">
@@ -128,8 +129,8 @@ export default function Settings() {
       </ScrollView>
 
       <InputSheet visible={!!edit} onClose={() => setEdit(null)} title={edit ? labels[edit] : ''} keyboard="number"
-        initial={edit === 'tablesPerTruck' ? String(store.settings.tablesPerTruck) : edit === 'debtDueDays' ? String(store.settings.debtDueDays ?? 7) : ''}
-        onSave={(txt) => { const n = Number(String(txt).replace(',', '.')); if (isNaN(n) || n < 0) return toast('Số không hợp lệ', 'err'); if (edit === 'tablesPerTruck') store.setSettings({ tablesPerTruck: Math.max(1, Math.round(n)) }); else store.setSettings({ debtDueDays: Math.round(n) }); setEdit(null); haptic('success'); }} />
+        initial={edit === 'tablesPerTruck' ? String(cfg.tablesPerTruck) : edit === 'debtDueDays' ? String(cfg.debtDueDays) : ''}
+        onSave={(txt) => { const n = Number(String(txt).replace(',', '.')); if (isNaN(n) || n < 0) return toast('Số không hợp lệ', 'err'); if (edit === 'tablesPerTruck') store.setTeamConfig({ tablesPerTruck: Math.max(1, Math.round(n)) }); else store.setTeamConfig({ debtDueDays: Math.round(n) }); setEdit(null); haptic('success'); }} />
 
       <Sheet visible={!!company} onClose={() => setCompany(null)} title="Thông tin trên phiếu cân">
         {company ? (
@@ -140,7 +141,7 @@ export default function Settings() {
             <Field label="Dòng cuối phiếu"><Input value={company.footer} onChangeText={(v) => setCompany({ ...company, footer: v })} placeholder="VD: Cảm ơn quý khách. STK: ..." /></Field>
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <Btn title="Huỷ" kind="ghost" onPress={() => setCompany(null)} style={{ flex: 1 }} />
-              <Btn title="Lưu" onPress={() => { store.setSettings({ company }); setCompany(null); haptic('success'); }} style={{ flex: 1 }} />
+              <Btn title="Lưu" onPress={() => { store.setTeamConfig({ company }); setCompany(null); haptic('success'); }} style={{ flex: 1 }} />
             </View>
           </>
         ) : null}

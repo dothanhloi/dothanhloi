@@ -3,7 +3,7 @@ import { nowIso, todayStr } from './format';
 import { Store, useStore } from './store';
 import type { SyncRecord } from './types';
 
-const BUCKETS = ['users', 'drivers', 'presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos', 'trucks'] as const;
+const BUCKETS = ['users', 'drivers', 'presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos', 'configs', 'trucks'] as const;
 
 export function exportPayload(s: Store): Record<string, unknown> {
   const out: Record<string, unknown> = { exportedAt: nowIso(), version: 2 };

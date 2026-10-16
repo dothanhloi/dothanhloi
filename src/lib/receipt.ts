@@ -3,7 +3,7 @@ import * as Sharing from 'expo-sharing';
 import { truckStats, presetOf } from './calc';
 import { fmtDateTime, fmtDateVN, fmtKg, fmtMoney, fmtNum, fmtPct, fmtTime } from './format';
 import { presetSummary } from './presetText';
-import { paymentsOf, Store } from './store';
+import { paymentsOf, Store, teamConfigOf } from './store';
 import type { Truck } from './types';
 
 function esc(s: unknown): string {
@@ -14,13 +14,13 @@ function esc(s: unknown): string {
 export function receiptHtml(t: Truck, st: Store): string {
   const s = truckStats(t);
   const p = presetOf(t);
-  const co = st.settings.company || { name: '', phone: '', address: '', footer: '' };
+  const co = teamConfigOf(st).company;
   const seller = t.sellerId ? st.sellers?.[t.sellerId] : null;
   const driver = t.driverId ? st.drivers[t.driverId] : null;
   const weigher = t.weigherId ? st.users[t.weigherId]?.name : '';
   const pays = paymentsOf(t);
 
-  const tables = t.tables.map((tb) => {
+  const tables = ((t.weighMode || 'bags') === 'truck' ? [] : t.tables).map((tb) => {
     const rows = tb.cells[0]?.length || 5;
     const cols: number[] = tb.cells.map((col) => col.reduce<number>((a, v) => a + (v == null ? 0 : Number(v)), 0));
     const bags = tb.cells.reduce((n, c) => n + c.filter((v) => v != null).length, 0);

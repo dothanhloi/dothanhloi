@@ -1,6 +1,6 @@
 import { truckStats } from './calc';
 import { addDays, parseDate, todayStr } from './format';
-import type { Store } from './store';
+import { teamConfigOf, type Store } from './store';
 import type { Truck } from './types';
 
 export type Period = 'day' | 'week' | 'month' | 'year' | 'custom';
@@ -115,7 +115,7 @@ export interface Reminder { kind: 'unfinished' | 'overdue' | 'noprice' | 'unload
 export function reminders(store: Store): Reminder[] {
   const out: Reminder[] = [];
   const today = todayStr();
-  const dueDays = Number(store.settings.debtDueDays ?? 7);
+  const dueDays = teamConfigOf(store).debtDueDays;
   const overdueBySeller: Record<string, { name: string; amount: number; n: number }> = {};
   for (const t of Object.values(store.trucks)) {
     if (t.deleted) continue;

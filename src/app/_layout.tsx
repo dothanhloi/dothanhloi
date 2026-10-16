@@ -26,9 +26,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!hydrated) return;
     useStore.getState().ensureDefaultPreset();
-    useStore.getState().migratePins().finally(() => { syncNow(); runAutoBackup(); });
+    // băm PIN cũ sau khi nhận dữ liệu máy chủ (tránh ghi đè PIN quản lý đã đổi ở máy khác)
+    syncNow().then((r) => { if (r.ok || ('off' in r && r.off)) useStore.getState().migratePins(); useStore.getState().ensureDefaultPreset(); });
+    runAutoBackup();
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets || s.sellers !== prev.sellers || s.dayPrices !== prev.dayPrices || s.warehouses !== prev.warehouses || s.products !== prev.products || s.sales !== prev.sales || s.hedges !== prev.hedges || s.photos !== prev.photos) scheduleSync();
+      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets || s.sellers !== prev.sellers || s.dayPrices !== prev.dayPrices || s.warehouses !== prev.warehouses || s.products !== prev.products || s.sales !== prev.sales || s.hedges !== prev.hedges || s.photos !== prev.photos || s.configs !== prev.configs) scheduleSync();
     });
     return unsub;
   }, [hydrated]);

@@ -26,8 +26,9 @@ export const appStorage: StateStorage = {
     try { await Storage.setItemAsync(name, value); }
     catch (e) {
       console.warn('kv setItem', e);
-      // dự phòng
+      // dự phòng: ghi AsyncStorage và xoá bản SQLite để lần mở sau đọc bản mới nhất
       try { await AsyncStorage.setItem(name, value); } catch {}
+      try { await Storage.removeItemAsync(name); } catch {}
     }
   },
   removeItem: async (name) => {
