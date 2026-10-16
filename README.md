@@ -13,7 +13,7 @@ Mã nguồn backend Google Sheets nằm trong `google-apps-script/Code.gs`.
 | Giao diện bảng 5 cột, mỗi cột 5 số, tổng ở dưới | Mỗi xe mặc định 2 bảng (BẢNG 1, BẢNG 2), bấm **Thêm bảng** nếu cần. Bấm ô trống → bàn phím số → **Tiếp** để nhảy sang ô trống kế tiếp. |
 | Tổng bao / Tổng thô / Trung bình | Hiện ở đầu màn hình xe, tự cập nhật. |
 | Đã thanh toán / chưa thanh toán | Thẻ **Thanh toán**: Chưa – Một phần – Đã thanh toán, số tiền đã trả, còn lại. |
-| Chất lượng: mẫu (g), tạp, độ | Thẻ **Chất lượng & giá**: Mẫu (g), Tạp (g) → tự tính % tạp, Độ (%), độ chuẩn, bì/bao → **Thực nhận**. |
+| Chất lượng: mẫu (g), tạp, độ | Thẻ **Chất lượng & giá**: chọn **quy ước tạp độ**, nhập Mẫu (g), Tạp (g hoặc %), Độ (%) → app trừ theo quy ước → **Thực nhận**, **Giá sau trừ**. |
 | Giá cà phê | Nhập giá đ/kg → tự tính **Thành tiền** = thực nhận × giá. |
 | Sửa phải nhấn giữ, lưu lịch sử | Ô đã có số hoặc trường đã điền: bấm thường chỉ báo “Nhấn giữ để sửa”. Nhấn giữ ~0,5 giây mới sửa. Mọi thay đổi ghi vào **Lịch sử sửa** (ai, lúc nào, cũ → mới). |
 | Đã bốc / chưa bốc | Nút gạt **Chưa bốc / Đã bốc** trên xe, lưu giờ bốc. |
@@ -120,21 +120,27 @@ App tự đồng bộ 3 giây sau mỗi thay đổi khi có mạng; không có m
 
 ---
 
-## 5. Công thức tính
+## 5. Quy ước tạp độ và công thức tính
+
+Tạp, độ được trừ theo **quy ước (preset)** chọn cho từng xe. Tạo và sửa quy ước trong **Cài đặt → Quy ước tạp độ** (có 4 mẫu sẵn: Trừ kg 1:1, Trừ giá, Bảng trừ lùi, Chỉ ghi nhận). Mỗi quy ước gồm:
+
+| Phần | Tuỳ chọn |
+|---|---|
+| Cách nhập tạp | Gram trong mẫu (app tính % = tạp g / mẫu g) hoặc nhập % trực tiếp |
+| Tạp, Độ (mỗi yếu tố riêng) | **Không trừ** · **Trừ kg**: mỗi 1% vượt chuẩn trừ R% khối lượng · **Trừ giá**: mỗi 1% vượt chuẩn trừ R đ/kg · **Bảng trừ lùi**: các bậc "đo ≤ X% → trừ Y" (Y theo % kg hoặc đ/kg) |
+| Bì | Không trừ · kg mỗi bao · % tổng thô |
+
+Xe lưu **bản sao** quy ước tại thời điểm chọn, nên sửa quy ước sau này không đổi số liệu xe cũ. Đổi quy ước trên xe được ghi vào lịch sử.
 
 ```
 Tổng thô      = tổng tất cả các ô
-Tạp %         = Tạp (g) / Mẫu (g) × 100
-Trừ tạp (kg)  = Tổng thô × Tạp %
-Trừ độ (kg)   = Tổng thô × max(0, Độ − Độ chuẩn) %
-Trừ bì (kg)   = Số bao × Bì/bao
+Trừ bì        = số bao × bì/bao  (hoặc tổng thô × %)
+Trừ tạp (kg)  / Trừ độ (kg)   theo quy ước (phương pháp Trừ kg hoặc Bảng % kg)
 Thực nhận     = Tổng thô − trừ bì − trừ tạp − trừ độ
-Thành tiền    = Thực nhận × Giá
+Giá sau trừ   = Giá − trừ tạp (đ/kg) − trừ độ (đ/kg)   (phương pháp Trừ giá hoặc Bảng đ/kg)
+Thành tiền    = Thực nhận × Giá sau trừ
 Còn lại       = Thành tiền − Đã thanh toán
 ```
-Độ chuẩn và bì/bao mặc định chỉnh trong **Cài đặt** (áp dụng cho xe tạo mới; mỗi xe vẫn sửa riêng được).
-
----
 
 ## 6. Cấu trúc mã
 
@@ -145,7 +151,7 @@ src/app/            màn hình (Expo Router)
   index.tsx         danh sách xe theo ngày, tạo xe
   truck/[id].tsx    chi tiết xe: bảng cân, chất lượng, giá, thanh toán, xong xe
   history/[id].tsx  lịch sử sửa của xe
-  settings/         nhân viên, tài xế, Google Sheets, mặc định, sao lưu
+  settings/         nhân viên, tài xế, quy ước tạp độ, Google Sheets, sao lưu
 src/components/     WeighTable (bảng 5×5), NumPad (bàn phím số), ui (thành phần chung)
 src/lib/            store (zustand + AsyncStorage), calc, sync (Google), format, types
 google-apps-script/ Code.gs – backend Google Sheets

@@ -24,9 +24,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // Tự đồng bộ khi mở app và khi dữ liệu đổi
   useEffect(() => {
     if (!hydrated) return;
+    useStore.getState().ensureDefaultPreset();
     syncNow();
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers) scheduleSync();
+      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets) scheduleSync();
     });
     return unsub;
   }, [hydrated]);

@@ -18,6 +18,7 @@
  *   Xe            : mỗi xe một dòng + tổng kết
  *   Chi tiết cân  : từng bao
  *   Lịch sử sửa   : mọi thay đổi (ai, lúc nào, cũ → mới)
+ *   Quy ước      : các quy ước tạp/độ
  *   Nhân viên, Tài xế
  */
 
@@ -124,6 +125,28 @@ function upsert_(records) {
 }
 
 /* ---------------- tính toán (giống app) ---------------- */
+function legacyPreset_(t) {
+  return { name: 'Mặc định', tareMode: 'perBag', tareValue: Number(t.tarePerBag) || 0, impurityInput: 'gram',
+    impurity: { standard: 0, method: 'kg', rate: 1, tableUnit: 'kgPct', table: [] },
+    moisture: { standard: Number(t.moistureStd) || 0, method: 'kg', rate: 1, tableUnit: 'kgPct', table: [] } };
+}
+function applyRule_(rule, measured, gross) {
+  if (measured === null || measured === undefined || isNaN(measured)) return { kg: 0, price: 0 };
+  var std = Number(rule.standard) || 0;
+  var excess = Math.max(0, measured - std);
+  if (rule.method === 'kg') return { kg: gross * (excess * (Number(rule.rate) || 0)) / 100, price: 0 };
+  if (rule.method === 'price') return { kg: 0, price: excess * (Number(rule.rate) || 0) };
+  if (rule.method === 'table') {
+    var rows = (rule.table || []).slice().sort(function (a, b) { return a.upTo - b.upTo; });
+    if (!rows.length) return { kg: 0, price: 0 };
+    var row = null;
+    for (var i = 0; i < rows.length; i++) if (measured <= rows[i].upTo) { row = rows[i]; break; }
+    if (!row) row = rows[rows.length - 1];
+    var v = Number(row.value) || 0;
+    return rule.tableUnit === 'price' ? { kg: 0, price: v } : { kg: gross * v / 100, price: 0 };
+  }
+  return { kg: 0, price: 0 };
+}
 function truckStats_(t) {
   var bags = 0, gross = 0;
   (t.tables || []).forEach(function (tb) {
@@ -131,21 +154,26 @@ function truckStats_(t) {
       col.forEach(function (v) { if (v !== null && v !== undefined && v !== '') { bags++; gross += Number(v) || 0; } });
     });
   });
+  var p = t.preset || legacyPreset_(t);
   var sample = t.sample || {};
-  var impurityPct = sample.gram && sample.impurityGram != null ? (Number(sample.impurityGram) / Number(sample.gram)) * 100 : 0;
-  var impurityKg = gross * impurityPct / 100;
-  var moisture = sample.moisture != null ? Number(sample.moisture) : null;
-  var std = Number(t.moistureStd) || 0;
-  var moistureExcess = moisture != null ? Math.max(0, moisture - std) : 0;
-  var moistureKg = gross * moistureExcess / 100;
-  var tare = bags * (Number(t.tarePerBag) || 0);
-  var net = Math.max(0, gross - tare - impurityKg - moistureKg);
+  var tare = 0;
+  if (p.tareMode === 'perBag') tare = bags * (Number(p.tareValue) || 0);
+  else if (p.tareMode === 'percent') tare = gross * (Number(p.tareValue) || 0) / 100;
+  var impurityPct = null;
+  if (p.impurityInput === 'percent') impurityPct = sample.impurityPct != null && sample.impurityPct !== '' ? Number(sample.impurityPct) : null;
+  else if (sample.gram && sample.impurityGram != null && sample.impurityGram !== '') impurityPct = Number(sample.impurityGram) / Number(sample.gram) * 100;
+  var imp = applyRule_(p.impurity, impurityPct, gross);
+  var moisture = sample.moisture != null && sample.moisture !== '' ? Number(sample.moisture) : null;
+  var moi = applyRule_(p.moisture, moisture, gross);
+  var net = Math.max(0, gross - tare - imp.kg - moi.kg);
   var price = t.price != null && t.price !== '' ? Number(t.price) : null;
-  var amount = price != null ? net * price : null;
+  var priceDeduct = imp.price + moi.price;
+  var effectivePrice = price != null ? Math.max(0, price - priceDeduct) : null;
+  var amount = effectivePrice != null ? net * effectivePrice : null;
   var paid = Number((t.payment && t.payment.paidAmount) || 0);
-  return { bags: bags, gross: gross, avg: bags ? gross / bags : 0, impurityPct: impurityPct, impurityKg: impurityKg, moisture: moisture,
-    moistureExcess: moistureExcess, moistureKg: moistureKg, tare: tare, net: net, price: price, amount: amount, paid: paid,
-    remaining: amount != null ? amount - paid : null };
+  return { bags: bags, gross: gross, avg: bags ? gross / bags : 0, impurityPct: impurityPct, impurityKg: imp.kg, impurityPrice: imp.price,
+    moisture: moisture, moistureKg: moi.kg, moisturePrice: moi.price, tare: tare, net: net, price: price, priceDeduct: priceDeduct,
+    effectivePrice: effectivePrice, amount: amount, paid: paid, remaining: amount != null ? amount - paid : null, presetName: p.name || '' };
 }
 
 function fmtTime_(iso) {
@@ -165,10 +193,11 @@ function round1_(n) { return Math.round((Number(n) || 0) * 10) / 10; }
 /* ---------------- các trang dễ đọc ---------------- */
 function rebuildViews_() {
   var all = readAll_();
-  var users = {}, drivers = {}, trucks = [];
+  var users = {}, drivers = {}, trucks = [], presets = [];
   all.forEach(function (r) {
     if (r.type === 'user') users[r.id] = r;
     else if (r.type === 'driver') drivers[r.id] = r;
+    else if (r.type === 'preset') presets.push(r);
     else if (r.type === 'truck' && !r.deleted) trucks.push(r);
   });
   trucks.sort(function (a, b) { return a.date === b.date ? (a.seq || 0) - (b.seq || 0) : (a.date < b.date ? 1 : -1); });
@@ -177,15 +206,15 @@ function rebuildViews_() {
 
   // Xe
   var hdr = ['Ngày', 'Xe', 'Tên xe', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
-    'Tổng bao', 'Tổng thô (kg)', 'TB/bao (kg)', 'Mẫu (g)', 'Tạp (g)', 'Tạp (%)', 'Trừ tạp (kg)', 'Độ (%)', 'Độ chuẩn (%)', 'Trừ độ (kg)', 'Bì/bao (kg)', 'Trừ bì (kg)',
-    'Thực nhận (kg)', 'Giá (đ/kg)', 'Thành tiền (đ)', 'Thanh toán', 'Đã TT (đ)', 'Còn lại (đ)', 'Ghi chú TT', 'Ghi chú', 'Số lần sửa', 'ID'];
+    'Tổng bao', 'Tổng thô (kg)', 'TB/bao (kg)', 'Quy ước', 'Mẫu (g)', 'Tạp (g)', 'Tạp (%)', 'Trừ tạp (kg)', 'Trừ tạp (đ/kg)', 'Độ (%)', 'Trừ độ (kg)', 'Trừ độ (đ/kg)', 'Trừ bì (kg)',
+    'Thực nhận (kg)', 'Giá (đ/kg)', 'Giá sau trừ (đ/kg)', 'Thành tiền (đ)', 'Thanh toán', 'Đã TT (đ)', 'Còn lại (đ)', 'Ghi chú TT', 'Ghi chú', 'Số lần sửa', 'ID'];
   var rows = trucks.map(function (t) {
     var s = truckStats_(t);
     return [fmtDate_(t.date), t.seq, t.name, dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
       t.status === 'done' ? 'Đã xong' : 'Đang cân', fmtTime_(t.doneAt), t.doneByName || uname(t.doneBy), t.loaded ? 'Đã bốc' : 'Chưa bốc',
-      s.bags, round1_(s.gross), round1_(s.avg), nz_(t.sample && t.sample.gram), nz_(t.sample && t.sample.impurityGram), Math.round(s.impurityPct * 100) / 100, round1_(s.impurityKg),
-      s.moisture == null ? '' : s.moisture, t.moistureStd || 0, round1_(s.moistureKg), t.tarePerBag || 0, round1_(s.tare),
-      round1_(s.net), s.price == null ? '' : s.price, s.amount == null ? '' : Math.round(s.amount), paymentLabel_(t.payment && t.payment.status),
+      s.bags, round1_(s.gross), round1_(s.avg), s.presetName, nz_(t.sample && t.sample.gram), nz_(t.sample && t.sample.impurityGram), s.impurityPct == null ? '' : Math.round(s.impurityPct * 100) / 100, round1_(s.impurityKg), Math.round(s.impurityPrice),
+      s.moisture == null ? '' : s.moisture, round1_(s.moistureKg), Math.round(s.moisturePrice), round1_(s.tare),
+      round1_(s.net), s.price == null ? '' : s.price, s.effectivePrice == null ? '' : Math.round(s.effectivePrice), s.amount == null ? '' : Math.round(s.amount), paymentLabel_(t.payment && t.payment.status),
       s.paid, s.remaining == null ? '' : Math.round(s.remaining), (t.payment && t.payment.note) || '', t.note || '', (t.history || []).length, t.id];
   });
   writeSheet_('Xe', hdr, rows);
@@ -220,6 +249,13 @@ function rebuildViews_() {
 
   // Nhân viên, Tài xế
   writeSheet_('Nhân viên', ['Tên', 'Vai trò', 'Trạng thái', 'Tạo lúc', 'ID'], Object.keys(users).map(function (k) { var u = users[k]; return [u.name, u.role === 'admin' ? 'Quản lý' : 'Nhân viên', u.deleted ? 'Đã xoá' : 'Hoạt động', fmtTime_(u.createdAt), u.id]; }));
+  writeSheet_('Quy ước', ['Tên', 'Mặc định', 'Nhập tạp', 'Tạp: cách trừ', 'Tạp chuẩn (%)', 'Tạp: mức trừ', 'Tạp: bảng', 'Độ: cách trừ', 'Độ chuẩn (%)', 'Độ: mức trừ', 'Độ: bảng', 'Bì', 'Ghi chú', 'Trạng thái', 'ID'],
+    presets.map(function (p) {
+      var rt = function (r) { return (r.table || []).map(function (x) { return '≤' + x.upTo + '%: ' + x.value + (r.tableUnit === 'price' ? ' đ/kg' : '% kg'); }).join('; '); };
+      return [p.name, p.isDefault ? 'X' : '', p.impurityInput === 'percent' ? '% trực tiếp' : 'gram/mẫu',
+        p.impurity.method, p.impurity.standard, p.impurity.rate, rt(p.impurity), p.moisture.method, p.moisture.standard, p.moisture.rate, rt(p.moisture),
+        p.tareMode === 'none' ? 'Không' : p.tareValue + (p.tareMode === 'perBag' ? ' kg/bao' : ' %'), p.note || '', p.deleted ? 'Đã xoá' : 'Hoạt động', p.id];
+    }));
   writeSheet_('Tài xế', ['Tên', 'Biển số', 'SĐT', 'Trạng thái', 'ID'], Object.keys(drivers).map(function (k) { var d = drivers[k]; return [d.name, d.plate || '', d.phone || '', d.deleted ? 'Đã xoá' : 'Hoạt động', d.id]; }));
 }
 

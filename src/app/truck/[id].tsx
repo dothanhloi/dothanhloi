@@ -6,14 +6,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NumPad } from '../../components/NumPad';
 import { EditingCell, WeighTable } from '../../components/WeighTable';
 import { Btn, Card, ConfirmSheet, Field, IconBtn, Input, InputSheet, KV, Pill, Sheet, Stats, Toggle, TopBar, haptic } from '../../components/ui';
-import { truckStats } from '../../lib/calc';
+import { presetOf, truckStats } from '../../lib/calc';
+import { presetSummary } from '../../lib/presetText';
 import { fmtDateTime, fmtDateVN, fmtKg, fmtMoney, fmtNum, fmtPct, fmtTime, parseNum } from '../../lib/format';
-import { activeDrivers, activeUsers, driverName, selectCurrentUser, useStore, userName } from '../../lib/store';
+import { activeDrivers, activePresets, activeUsers, driverName, selectCurrentUser, useStore, userName } from '../../lib/store';
 import { C, shadow } from '../../lib/theme';
 import { toast } from '../../lib/toast';
 import type { PaymentStatus } from '../../lib/types';
 
-type FieldKey = 'price' | 'gram' | 'impurityGram' | 'moisture' | 'moistureStd' | 'tarePerBag' | 'paidAmount' | 'paymentNote' | 'note' | 'name';
+type FieldKey = 'price' | 'gram' | 'impurityGram' | 'impurityPct' | 'moisture' | 'paidAmount' | 'paymentNote' | 'note' | 'name';
 
 const FIELDS: Record<FieldKey, { title: string; what: string; path: string[]; unit?: string; keyboard: 'decimal' | 'number' | 'text'; hint?: string }> = {
   name: { title: 'Đổi tên xe', what: 'Tên xe', path: ['name'], keyboard: 'text' },
@@ -21,8 +22,7 @@ const FIELDS: Record<FieldKey, { title: string; what: string; path: string[]; un
   gram: { title: 'Mẫu thử', what: 'Mẫu (g)', path: ['sample', 'gram'], unit: 'g', keyboard: 'decimal', hint: 'Khối lượng mẫu lấy ra để kiểm tra, VD 300' },
   impurityGram: { title: 'Tạp chất trong mẫu', what: 'Tạp (g)', path: ['sample', 'impurityGram'], unit: 'g', keyboard: 'decimal', hint: 'Số gram tạp trong mẫu. App tự tính % tạp = tạp / mẫu' },
   moisture: { title: 'Độ ẩm', what: 'Độ (%)', path: ['sample', 'moisture'], unit: '%', keyboard: 'decimal', hint: 'Độ ẩm đo được của lô hàng' },
-  moistureStd: { title: 'Độ chuẩn', what: 'Độ chuẩn (%)', path: ['moistureStd'], unit: '%', keyboard: 'decimal', hint: 'Phần độ vượt quá mức này sẽ bị trừ theo %' },
-  tarePerBag: { title: 'Bì mỗi bao', what: 'Bì/bao (kg)', path: ['tarePerBag'], unit: 'kg', keyboard: 'decimal', hint: 'Khối lượng bao bì trừ cho mỗi bao, VD 0.3' },
+  impurityPct: { title: 'Tạp chất', what: 'Tạp (%)', path: ['sample', 'impurityPct'], unit: '%', keyboard: 'decimal', hint: 'Nhập % tạp trực tiếp theo quy ước đang chọn' },
   paidAmount: { title: 'Số tiền đã thanh toán', what: 'Đã thanh toán', path: ['payment', 'paidAmount'], unit: 'đ', keyboard: 'number' },
   paymentNote: { title: 'Ghi chú thanh toán', what: 'Ghi chú TT', path: ['payment', 'note'], keyboard: 'text' },
   note: { title: 'Ghi chú xe', what: 'Ghi chú', path: ['note'], keyboard: 'text' },
@@ -39,6 +39,7 @@ export default function TruckScreen() {
   const [field, setField] = useState<FieldKey | null>(null);
   const [pickDriver, setPickDriver] = useState(false);
   const [pickWeigher, setPickWeigher] = useState(false);
+  const [pickPreset, setPickPreset] = useState(false);
   const [askDone, setAskDone] = useState(false);
   const [askReopen, setAskReopen] = useState(false);
   const [askDelete, setAskDelete] = useState(false);
@@ -99,6 +100,8 @@ export default function TruckScreen() {
 
   const readOnly = t.status === 'done';
   const allLocked = t.tables.every((tb) => tb.locked);
+  const preset = presetOf(t);
+  const presets = activePresets(store);
 
   const onKey = (k: string) => setEditing((e) => {
     if (!e) return e;
@@ -149,8 +152,6 @@ export default function TruckScreen() {
     else { const n = parseNum(text); if (n !== null && isNaN(n)) return toast('Số không hợp lệ', 'err'); v = n; }
     if (field === 'name' && !v) return toast('Tên không được trống', 'err');
     if (field === 'paidAmount' && v == null) v = 0;
-    if (field === 'tarePerBag' && v == null) v = 0;
-    if (field === 'moistureStd' && v == null) v = 0;
     store.setField(t.id, f.what, f.path, v);
     setField(null);
     haptic('success');
@@ -190,9 +191,9 @@ export default function TruckScreen() {
             <View style={st.doneGrid}>
               <Text style={st.doneRow}><Text style={st.doneK}>Tổng bao </Text><Text style={st.doneV}>{s.bags}</Text></Text>
               <Text style={st.doneRow}><Text style={st.doneK}>Thực nhận </Text><Text style={st.doneV}>{fmtKg(s.net)} kg</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Tạp </Text><Text style={st.doneV}>{fmtPct(s.impurityPct)}</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Độ </Text><Text style={st.doneV}>{s.moisture != null ? fmtPct(s.moisture, 1) : '—'}</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Giá </Text><Text style={st.doneV}>{s.price != null ? fmtMoney(s.price) + '/kg' : '—'}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Tạp </Text><Text style={st.doneV}>{s.impurityPct != null ? fmtPct(s.impurityPct) : '—'}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Độ </Text><Text style={st.doneV}>{s.moistureVal != null ? fmtPct(s.moistureVal, 1) : '—'}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Giá </Text><Text style={st.doneV}>{s.effectivePrice != null ? fmtMoney(s.effectivePrice) + '/kg' : '—'}</Text></Text>
               <Text style={st.doneRow}><Text style={st.doneK}>Thành tiền </Text><Text style={st.doneV}>{fmtMoney(s.amount)}</Text></Text>
               <Text style={st.doneRow}><Text style={st.doneK}>Đã TT </Text><Text style={st.doneV}>{fmtMoney(s.paid)}</Text></Text>
               <Text style={st.doneRow}><Text style={st.doneK}>Còn lại </Text><Text style={st.doneV}>{fmtMoney(s.remaining)}</Text></Text>
@@ -235,13 +236,22 @@ export default function TruckScreen() {
 
         {/* Chất lượng & giá */}
         <Card title="Chất lượng & giá" right={<Text style={{ fontSize: 11, color: C.muted }}>nhấn giữ để sửa</Text>}>
-          <KV label="Mẫu" value={t.sample.gram != null ? fmtNum(t.sample.gram) : 'Nhập'} unit={t.sample.gram != null ? 'g' : undefined} {...guarded('gram')} />
-          <KV label="Tạp" sub={s.impurityPct ? `= ${fmtPct(s.impurityPct)} · trừ ${fmtKg(s.impurityKg)} kg` : undefined} value={t.sample.impurityGram != null ? fmtNum(t.sample.impurityGram) : 'Nhập'} unit={t.sample.impurityGram != null ? 'g' : undefined} {...guarded('impurityGram')} />
-          <KV label="Độ" sub={s.moisture != null ? (s.moistureExcess > 0 ? `vượt chuẩn ${fmtPct(s.moistureExcess, 1)} · trừ ${fmtKg(s.moistureKg)} kg` : 'đạt chuẩn') : undefined} value={t.sample.moisture != null ? fmtNum(t.sample.moisture) : 'Nhập'} unit={t.sample.moisture != null ? '%' : undefined} {...guarded('moisture')} />
-          <KV label="Độ chuẩn" value={fmtNum(t.moistureStd)} unit="%" {...guarded('moistureStd')} empty={false} />
-          <KV label="Bì mỗi bao" sub={s.tare ? `trừ ${fmtKg(s.tare)} kg` : undefined} value={fmtNum(t.tarePerBag)} unit="kg" {...guarded('tarePerBag')} empty={false} />
+          <KV label="Quy ước tạp độ" sub={presetSummary(preset)} value={preset.name} onPress={() => { if (readOnly) return toast('Xe đã xong'); setPickPreset(true); }} />
+          {preset.impurityInput === 'gram' ? (
+            <>
+              <KV label="Mẫu" value={t.sample.gram != null ? fmtNum(t.sample.gram) : 'Nhập'} unit={t.sample.gram != null ? 'g' : undefined} {...guarded('gram')} />
+              <KV label="Tạp" sub={s.impurityPct != null ? `= ${fmtPct(s.impurityPct)} · ${s.impurity.label}` : undefined} value={t.sample.impurityGram != null ? fmtNum(t.sample.impurityGram) : 'Nhập'} unit={t.sample.impurityGram != null ? 'g' : undefined} {...guarded('impurityGram')} />
+            </>
+          ) : (
+            <KV label="Tạp" sub={s.impurityPct != null ? s.impurity.label : undefined} value={t.sample.impurityPct != null ? fmtNum(t.sample.impurityPct, 2) : 'Nhập'} unit={t.sample.impurityPct != null ? '%' : undefined} {...guarded('impurityPct')} />
+          )}
+          <KV label="Độ" sub={s.moistureVal != null ? s.moisture.label : undefined} value={t.sample.moisture != null ? fmtNum(t.sample.moisture) : 'Nhập'} unit={t.sample.moisture != null ? '%' : undefined} {...guarded('moisture')} />
+          {s.tare > 0 ? <KV label="Trừ bì" sub={preset.tareMode === 'perBag' ? `${fmtNum(preset.tareValue, 2)} kg × ${s.bags} bao` : `${fmtNum(preset.tareValue, 2)}% tổng thô`} value={'−' + fmtKg(s.tare)} unit="kg" /> : null}
+          {s.impurity.kg > 0 ? <KV label="Trừ tạp" value={'−' + fmtKg(s.impurity.kg)} unit="kg" /> : null}
+          {s.moisture.kg > 0 ? <KV label="Trừ độ" value={'−' + fmtKg(s.moisture.kg)} unit="kg" /> : null}
           <KV label="Thực nhận" value={fmtKg(s.net)} unit="kg" highlight="green" />
           <KV label="Giá" value={t.price != null ? fmtMoney(t.price) : 'Nhập giá'} unit={t.price != null ? '/kg' : undefined} {...guarded('price')} />
+          {s.priceDeduct > 0 ? <KV label="Giá sau trừ" sub={`trừ ${fmtMoney(s.priceDeduct)}/kg (tạp ${fmtMoney(s.impurity.price)} + độ ${fmtMoney(s.moisture.price)})`} value={fmtMoney(s.effectivePrice)} unit="/kg" /> : null}
           <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" />
         </Card>
 
@@ -298,6 +308,21 @@ export default function TruckScreen() {
         </View>
       </Sheet>
 
+      <Sheet visible={pickPreset} onClose={() => setPickPreset(false)} title="Chọn quy ước tạp độ" desc="Thêm/sửa quy ước trong Cài đặt → Quy ước tạp độ. Xe lưu bản sao quy ước tại thời điểm chọn.">
+        {presets.map((p) => (
+          <Pressable key={p.id} onPress={() => { store.applyPreset(t.id, p.id); setPickPreset(false); haptic('success'); }}
+            style={({ pressed }) => [st.presetRow, preset.id === p.id && { borderColor: C.blue, backgroundColor: C.blueSoft }, pressed && { opacity: 0.7 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontWeight: '700', color: C.text }}>{p.name}{p.isDefault ? '  · mặc định' : ''}</Text>
+              <Text style={{ color: C.muted, fontSize: 12.5, marginTop: 2 }}>{presetSummary(p)}</Text>
+            </View>
+            {preset.id === p.id ? <Ionicons name="checkmark-circle" size={22} color={C.blue} /> : null}
+          </Pressable>
+        ))}
+        {presets.length === 0 ? <Text style={{ color: C.muted }}>Chưa có quy ước nào.</Text> : null}
+        <Btn title="Quản lý quy ước" kind="secondary" icon="options" onPress={() => { setPickPreset(false); router.push('/settings/presets'); }} style={{ marginTop: 8 }} />
+      </Sheet>
+
       <ConfirmSheet visible={askDone} onClose={() => setAskDone(false)} title={`Xong ${t.name}?`} confirmText="Xác nhận xong xe"
         desc="Các bảng sẽ bị khoá. Muốn sửa lại phải nhấn giữ để mở xe." onConfirm={() => { setAskDone(false); if (editing) commit(editing); setEditing(null); store.markDone(t.id, true); haptic('success'); toast(`${t.name} đã xong · ${fmtKg(s.gross)} kg`, 'ok', 2500); }}>
         <Card style={{ backgroundColor: C.bg, shadowOpacity: 0, elevation: 0 }}>
@@ -346,6 +371,7 @@ const st = StyleSheet.create({
   doneRow: { width: '50%', color: '#fff', fontSize: 13.5, marginBottom: 4 },
   doneK: { color: 'rgba(255,255,255,0.85)' },
   doneV: { fontWeight: '700', color: '#fff', fontVariant: ['tabular-nums'] },
+  presetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 12, borderWidth: 1.5, borderColor: C.line, marginBottom: 8 },
   histLink: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 12 },
   bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 12, paddingTop: 10, backgroundColor: 'rgba(242,243,247,0.95)' },
 });

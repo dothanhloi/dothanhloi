@@ -1,14 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { tableStats } from './calc';
+import { PRESET_TEMPLATES, tableStats } from './calc';
 import { COLS, ROWS, nowIso, uid } from './format';
-import type { Driver, HistoryKind, Settings, SyncRecord, Truck, User, WeighTable } from './types';
+import type { Driver, HistoryKind, PresetSnapshot, QualityPreset, Settings, SyncRecord, Truck, User, WeighTable } from './types';
 
 export interface State {
   users: Record<string, User>;
   drivers: Record<string, Driver>;
   trucks: Record<string, Truck>;
+  presets: Record<string, QualityPreset>;
   session: { userId: string | null };
   settings: Settings;
   hydrated: boolean;
@@ -38,6 +39,13 @@ export interface Actions {
   lockAllTables: (truckId: string, locked: boolean) => void;
   addTable: (truckId: string) => void;
   removeLastTable: (truckId: string) => boolean;
+  // presets (quy ước tạp độ)
+  addPreset: (d: Omit<QualityPreset, 'id' | 'type' | 'createdAt' | 'updatedAt'>) => QualityPreset;
+  updatePreset: (id: string, patch: Partial<QualityPreset>) => void;
+  removePreset: (id: string) => void;
+  setDefaultPreset: (id: string) => void;
+  ensureDefaultPreset: () => void;
+  applyPreset: (truckId: string, presetId: string) => void;
   // settings
   setSettings: (patch: Partial<Settings>) => void;
   // sync
@@ -75,6 +83,7 @@ export const useStore = create<Store>()(
       users: {},
       drivers: {},
       trucks: {},
+      presets: {},
       session: { userId: null },
       settings: defaultSettings(),
       hydrated: false,
@@ -125,6 +134,7 @@ export const useStore = create<Store>()(
         const n = Math.max(1, Number(s.settings.tablesPerTruck) || 2);
         const tables: WeighTable[] = [];
         for (let i = 1; i <= n; i++) tables.push(newTable(i));
+        const dp = defaultPresetOf(s);
         const t: Truck = {
           id: uid(), type: 'truck', date, seq, name: 'Xe ' + seq,
           driverId: driverId || null,
@@ -134,10 +144,11 @@ export const useStore = create<Store>()(
           status: 'weighing', doneAt: null, doneBy: null, doneByName: '',
           loaded: false, loadedAt: null, loadedBy: null,
           tables,
-          sample: { gram: null, impurityGram: null, moisture: null },
+          sample: { gram: null, impurityGram: null, impurityPct: null, moisture: null },
           price: null,
           tarePerBag: Number(s.settings.tarePerBag) || 0,
           moistureStd: Number(s.settings.moistureStd) || 0,
+          preset: dp ? snapshotOf(dp) : null,
           payment: { status: 'unpaid', paidAmount: 0, note: '' },
           note: note || '',
           history: [],
@@ -254,6 +265,45 @@ export const useStore = create<Store>()(
         return true;
       },
 
+      /* ---------- presets ---------- */
+      addPreset: (d) => {
+        const p: QualityPreset = { ...d, id: uid(), type: 'preset', createdAt: nowIso(), updatedAt: nowIso() };
+        set((s) => {
+          const presets = { ...s.presets, [p.id]: p };
+          if (p.isDefault) for (const k of Object.keys(presets)) if (k !== p.id && presets[k].isDefault) presets[k] = bump(presets[k], { isDefault: false });
+          return { presets };
+        });
+        return p;
+      },
+      updatePreset: (id, patch) =>
+        set((s) => {
+          if (!s.presets[id]) return {};
+          const presets = { ...s.presets, [id]: bump(s.presets[id], patch) };
+          if (patch.isDefault) for (const k of Object.keys(presets)) if (k !== id && presets[k].isDefault) presets[k] = bump(presets[k], { isDefault: false });
+          return { presets };
+        }),
+      removePreset: (id) =>
+        set((s) => (s.presets[id] ? { presets: { ...s.presets, [id]: bump(s.presets[id], { deleted: true, isDefault: false }) } } : {})),
+      setDefaultPreset: (id) => get().updatePreset(id, { isDefault: true }),
+      ensureDefaultPreset: () => {
+        const s = get();
+        if (Object.values(s.presets).some((p) => !p.deleted)) return;
+        const tpl = PRESET_TEMPLATES[0];
+        const base = tpl.make();
+        // giữ các giá trị mặc định cũ (độ chuẩn, bì) nếu người dùng đã chỉnh
+        base.tareValue = Number(s.settings.tarePerBag) || 0;
+        base.moisture = { ...base.moisture, standard: Number(s.settings.moistureStd) || 13 };
+        get().addPreset({ ...base, name: tpl.name, note: tpl.desc, isDefault: true });
+      },
+      applyPreset: (truckId, presetId) => {
+        const s = get();
+        const t = s.trucks[truckId];
+        const p = s.presets[presetId];
+        if (!t || !p) return;
+        const old = t.preset?.name || 'Mặc định';
+        get().patchTruck(truckId, { preset: snapshotOf(p) }, { what: 'Quy ước tạp độ', old, new: p.name, kind: 'field' });
+      },
+
       /* ---------- settings ---------- */
       setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
 
@@ -263,10 +313,11 @@ export const useStore = create<Store>()(
         const users = { ...s.users };
         const drivers = { ...s.drivers };
         const trucks = { ...s.trucks };
+        const presets = { ...s.presets };
         let changed = 0;
         for (const r of records || []) {
           if (!r || !r.id || !r.type) continue;
-          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : null;
+          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : null;
           if (!bucket) continue;
           const local = bucket[r.id];
           if (!local || (r.updatedAt || '') > (local.updatedAt || '')) {
@@ -274,21 +325,37 @@ export const useStore = create<Store>()(
             changed++;
           }
         }
-        if (changed) set({ users, drivers, trucks });
+        if (changed) set({ users, drivers, trucks, presets });
         return changed;
       },
-      resetAll: () => set({ users: {}, drivers: {}, trucks: {}, session: { userId: null }, settings: defaultSettings() }),
+      resetAll: () => set({ users: {}, drivers: {}, trucks: {}, presets: {}, session: { userId: null }, settings: defaultSettings() }),
     }),
     {
       name: 'cancaphe.v1',
       storage: createJSONStorage(() => AsyncStorage),
-      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, session: s.session, settings: s.settings }),
+      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, session: s.session, settings: s.settings }),
+      merge: (persisted, current) => ({ ...current, ...(persisted as object), presets: (persisted as any)?.presets || {} }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
       },
     },
   ),
 );
+
+/* ---------- preset helpers ---------- */
+export function snapshotOf(p: QualityPreset): PresetSnapshot {
+  return {
+    id: p.id, name: p.name, tareMode: p.tareMode, tareValue: p.tareValue, impurityInput: p.impurityInput,
+    impurity: { ...p.impurity, table: (p.impurity.table || []).map((r) => ({ ...r })) },
+    moisture: { ...p.moisture, table: (p.moisture.table || []).map((r) => ({ ...r })) },
+  };
+}
+export function defaultPresetOf(s: Pick<Store, 'presets'>): QualityPreset | null {
+  const list = Object.values(s.presets || {}).filter((p) => !p.deleted);
+  return list.find((p) => p.isDefault) || list[0] || null;
+}
+export const activePresets = (s: Store): QualityPreset[] =>
+  Object.values(s.presets || {}).filter((p) => !p.deleted).sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name, 'vi'));
 
 /* ---------- selectors / helpers ---------- */
 export const selectCurrentUser = (s: Store): User | null => {
@@ -306,7 +373,7 @@ export const datesWithTrucks = (s: Store): { date: string; count: number }[] => 
   for (const t of Object.values(s.trucks)) if (!t.deleted) m[t.date] = (m[t.date] || 0) + 1;
   return Object.keys(m).sort().reverse().map((date) => ({ date, count: m[date] }));
 };
-export const allRecords = (s: Store): SyncRecord[] => [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.trucks)];
+export const allRecords = (s: Store): SyncRecord[] => [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.presets || {}), ...Object.values(s.trucks)];
 export const recordsSince = (s: Store, iso: string | null): SyncRecord[] => allRecords(s).filter((r) => !iso || (r.updatedAt || '') > iso);
 export const userName = (s: Store, id: string | null | undefined): string => (id && s.users[id]?.name) || '';
 export const driverName = (s: Store, id: string | null | undefined): string => (id && s.drivers[id]?.name) || '';

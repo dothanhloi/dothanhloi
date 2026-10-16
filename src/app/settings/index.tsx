@@ -8,8 +8,8 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Card, ConfirmSheet, InputSheet, Pill, TopBar, haptic } from '../../components/ui';
-import { fmtDateTime, fmtNum, todayStr } from '../../lib/format';
-import { activeDrivers, activeUsers, selectCurrentUser, useStore } from '../../lib/store';
+import { fmtDateTime, todayStr } from '../../lib/format';
+import { activeDrivers, activePresets, activeUsers, defaultPresetOf, selectCurrentUser, useStore } from '../../lib/store';
 import { getSyncStatus, onSyncStatus, SyncStatus } from '../../lib/sync';
 import { C, shadow } from '../../lib/theme';
 import { toast } from '../../lib/toast';
@@ -36,13 +36,15 @@ export default function Settings() {
   const isAdmin = user?.role === 'admin';
   const [sync, setSync] = useState<SyncStatus>(getSyncStatus());
   useEffect(() => onSyncStatus(setSync), []);
-  const [edit, setEdit] = useState<null | 'moistureStd' | 'tarePerBag' | 'tablesPerTruck'>(null);
+  const [edit, setEdit] = useState<null | 'tablesPerTruck'>(null);
+  const defaultPreset = defaultPresetOf(store);
+  const presetCount = activePresets(store).length;
   const [askReset, setAskReset] = useState(false);
   const [askImport, setAskImport] = useState<SyncRecord[] | null>(null);
 
   async function exportData() {
     try {
-      const data = { exportedAt: new Date().toISOString(), users: store.users, drivers: store.drivers, trucks: store.trucks };
+      const data = { exportedAt: new Date().toISOString(), users: store.users, drivers: store.drivers, presets: store.presets, trucks: store.trucks };
       const file = new File(Paths.cache, `cancaphe-${todayStr()}.json`);
       await file.write(JSON.stringify(data, null, 2));
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'application/json', dialogTitle: 'Sao lưu dữ liệu' });
@@ -55,13 +57,13 @@ export default function Settings() {
       if (res.canceled || !res.assets?.[0]) return;
       const text = await new File(res.assets[0].uri).text();
       const data = JSON.parse(text);
-      const recs: SyncRecord[] = [...Object.values(data.users || {}), ...Object.values(data.drivers || {}), ...Object.values(data.trucks || {})] as SyncRecord[];
+      const recs: SyncRecord[] = [...Object.values(data.users || {}), ...Object.values(data.drivers || {}), ...Object.values(data.presets || {}), ...Object.values(data.trucks || {})] as SyncRecord[];
       if (!recs.length) return toast('File không có dữ liệu', 'err');
       setAskImport(recs);
     } catch (e: any) { toast('Không đọc được file: ' + (e?.message || e), 'err', 3000); }
   }
 
-  const labels = { moistureStd: 'Độ chuẩn mặc định (%)', tarePerBag: 'Bì mỗi bao mặc định (kg)', tablesPerTruck: 'Số bảng mặc định khi tạo xe' };
+  const labels = { tablesPerTruck: 'Số bảng mặc định khi tạo xe' };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -87,8 +89,7 @@ export default function Settings() {
         </Card>
 
         <Card title="Mặc định khi tạo xe">
-          <Row icon="water" color={C.blue} title={labels.moistureStd} sub={`${fmtNum(store.settings.moistureStd)} % · phần vượt quá sẽ bị trừ theo %`} onPress={() => setEdit('moistureStd')} />
-          <Row icon="bag-handle" color={C.orange} title={labels.tarePerBag} sub={`${fmtNum(store.settings.tarePerBag)} kg`} onPress={() => setEdit('tarePerBag')} />
+          <Row icon="options" color={C.blue} title="Quy ước tạp độ" sub={defaultPreset ? `Mặc định: ${defaultPreset.name} · ${presetCount} quy ước` : 'Chưa có quy ước'} onPress={() => router.push('/settings/presets')} />
           <Row icon="grid" color={C.green} title={labels.tablesPerTruck} sub={`${store.settings.tablesPerTruck} bảng × 25 bao`} onPress={() => setEdit('tablesPerTruck')} />
         </Card>
 
@@ -101,9 +102,9 @@ export default function Settings() {
         <Text style={{ textAlign: 'center', color: C.muted, fontSize: 12, marginTop: 8 }}>Cân Cà Phê · phiên bản {Constants.expoConfig?.version || '1.0.0'}</Text>
       </ScrollView>
 
-      <InputSheet visible={!!edit} onClose={() => setEdit(null)} title={edit ? labels[edit] : ''} keyboard={edit === 'tablesPerTruck' ? 'number' : 'decimal'}
+      <InputSheet visible={!!edit} onClose={() => setEdit(null)} title={edit ? labels[edit] : ''} keyboard="number"
         initial={edit ? String(store.settings[edit]) : ''}
-        onSave={(txt) => { const n = Number(String(txt).replace(',', '.')); if (isNaN(n) || n < 0) return toast('Số không hợp lệ', 'err'); store.setSettings({ [edit!]: edit === 'tablesPerTruck' ? Math.max(1, Math.round(n)) : n }); setEdit(null); haptic('success'); }} />
+        onSave={(txt) => { const n = Number(String(txt).replace(',', '.')); if (isNaN(n) || n < 1) return toast('Số không hợp lệ', 'err'); store.setSettings({ tablesPerTruck: Math.max(1, Math.round(n)) }); setEdit(null); haptic('success'); }} />
 
       <ConfirmSheet visible={askReset} onClose={() => setAskReset(false)} title="Xoá toàn bộ dữ liệu trên máy?" danger confirmText="Xoá hết"
         desc="Tất cả xe, nhân viên, tài xế trên máy này sẽ bị xoá và bạn sẽ phải đăng nhập lại. Hãy sao lưu trước."
