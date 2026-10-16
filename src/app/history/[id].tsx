@@ -4,7 +4,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card, Empty, Pill, TopBar } from '../../components/ui';
 import { fmtDateTime, fmtMoney, fmtNum } from '../../lib/format';
-import { useStore } from '../../lib/store';
+import { canSeeMoney, useStore } from '../../lib/store';
 import { C } from '../../lib/theme';
 import type { HistoryEntry, HistoryKind } from '../../lib/types';
 
@@ -24,7 +24,9 @@ export default function History() {
   const t = useStore((s) => s.trucks[id || '']);
   const users = useStore((s) => s.users);
   const [kind, setKind] = useState<HistoryKind | 'all'>('all');
-  const list = useMemo(() => (t ? [...t.history].reverse().filter((h) => kind === 'all' || h.kind === kind) : []), [t, kind]);
+  const money = useStore(canSeeMoney);
+  const isMoney = (h: HistoryEntry) => /giá|thanh toán|tiền/i.test(h.what);
+  const list = useMemo(() => (t ? [...t.history].reverse().filter((h) => (kind === 'all' || h.kind === kind) && (money || !isMoney(h))) : []), [t, kind, money]);
 
   const resolveName = (h: HistoryEntry) => (h.by && users[h.by]?.name) || h.byName;
   const resolveVal = (h: HistoryEntry, v: unknown) => {

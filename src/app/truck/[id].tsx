@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NumPad } from '../../components/NumPad';
@@ -12,7 +12,7 @@ import { presetOf, truckStats } from '../../lib/calc';
 import { presetSummary } from '../../lib/presetText';
 import { fmtDateTime, fmtDateVN, fmtKg, fmtMoney, fmtNum, fmtPct, fmtTime, parseNum } from '../../lib/format';
 import { activeDrivers, activePresets, activeProducts, activeSellers, activeUsers, activeWarehouses, canSeeMoney, driverName, paymentsOf, photosOfTruck, productName, selectCurrentUser, sellerName, useStore, userName, warehouseName } from '../../lib/store';
-import { PHOTO_KINDS, deletePhotoFile, photoExists, takePhoto } from '../../lib/photos';
+import { PHOTO_KINDS, deletePhotoFile, photoUri, takePhoto } from '../../lib/photos';
 import { C, shadow } from '../../lib/theme';
 import { toast } from '../../lib/toast';
 import type { PaymentStatus } from '../../lib/types';
@@ -40,7 +40,13 @@ export default function TruckScreen() {
   const store = useStore();
   const user = useStore(selectCurrentUser);
   const t = store.trucks[id || ''];
-  const [editing, setEditing] = useState<EditingCell | null>(null);
+  const [editing, setEditingState] = useState<EditingCell | null>(null);
+  const editingRef = useRef<EditingCell | null>(null);
+  const setEditing = useCallback((v: EditingCell | null | ((cur: EditingCell | null) => EditingCell | null)) => {
+    const next = typeof v === 'function' ? v(editingRef.current) : v;
+    editingRef.current = next;
+    setEditingState(next);
+  }, []);
   const [field, setField] = useState<FieldKey | null>(null);
   const [pickDriver, setPickDriver] = useState(false);
   const [pickWeigher, setPickWeigher] = useState(false);
@@ -75,14 +81,13 @@ export default function TruckScreen() {
     if (!tr) return;
     if (tr.status === 'done') return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.');
     if (tr.tables[ti].locked) return toast('Bảng đang khoá. Bấm “Khoá” để mở.');
-    setEditing((cur) => {
-      if (cur && cur.tableIdx === ti && cur.col === c && cur.row === r) return cur;
-      if (cur) commit(cur);
-      if (tr.tables[ti].cells[c][r] != null) { toast('Nhấn giữ ô để sửa số đã nhập'); return null; }
-      haptic();
-      return { tableIdx: ti, col: c, row: r, text: '' };
-    });
-  }, [truckId, commit]);
+    const cur = editingRef.current;
+    if (cur && cur.tableIdx === ti && cur.col === c && cur.row === r) return;
+    if (cur) commit(cur);
+    if (tr.tables[ti].cells[c][r] != null) { toast('Nhấn giữ ô để sửa số đã nhập'); setEditing(null); return; }
+    haptic();
+    setEditing({ tableIdx: ti, col: c, row: r, text: '' });
+  }, [truckId, commit, setEditing]);
 
   const onCellLongPress = useCallback((ti: number, c: number, r: number) => {
     const tr = useStore.getState().trucks[truckId];
@@ -92,18 +97,24 @@ export default function TruckScreen() {
     const v = tr.tables[ti].cells[c][r];
     if (v == null) return;
     haptic('medium');
-    setEditing((cur) => { if (cur) commit(cur); return { tableIdx: ti, col: c, row: r, text: fmtNum(v) }; });
+    const cur = editingRef.current;
+    if (cur) commit(cur);
+    setEditing({ tableIdx: ti, col: c, row: r, text: fmtNum(v) });
     toast('Đang sửa – thay đổi sẽ được lưu vào lịch sử');
-  }, [truckId, commit]);
+  }, [truckId, commit, setEditing]);
 
   const onToggleLock = useCallback((ti: number) => {
     const st = useStore.getState();
     const tr = st.trucks[truckId];
     if (!tr) return;
     haptic();
-    setEditing((cur) => { if (cur && cur.tableIdx === ti) { commit(cur); return null; } return cur; });
-    st.setTableLocked(truckId, ti, !tr.tables[ti].locked);
-  }, [truckId, commit]);
+    const cur = editingRef.current;
+    if (cur && cur.tableIdx === ti) { commit(cur); setEditing(null); }
+    useStore.getState().setTableLocked(truckId, ti, !tr.tables[ti].locked);
+  }, [truckId, commit, setEditing]);
+
+  const editingValid = !editing || (!!t && editing.tableIdx < t.tables.length && (t.weighMode || 'bags') !== 'truck' && t.status !== 'done');
+  useEffect(() => { if (!editingValid) setEditing(null); }, [editingValid, setEditing]);
 
   if (!t || t.deleted || !s) {
     return (
@@ -188,7 +199,7 @@ export default function TruckScreen() {
   };
 
   const title = t.name;
-  const cellLabel = editing ? `${t.tables[editing.tableIdx].name} · Cột ${editing.col + 1} · Bao ${editing.row + 1}` : '';
+  const cellLabel = editing && t.tables[editing.tableIdx] ? `${t.tables[editing.tableIdx].name} · Cột ${editing.col + 1} · Bao ${editing.row + 1}` : '';
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -275,7 +286,7 @@ export default function TruckScreen() {
             {!readOnly ? (
               <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
                 <Btn title="Thêm bảng" kind="secondary" icon="add" small onPress={() => { haptic(); store.addTable(t.id); }} style={{ flex: 1 }} />
-                <Btn title="Bớt bảng" kind="ghost" icon="remove" small onPress={() => { if (!store.removeLastTable(t.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }} style={{ flex: 1 }} />
+                <Btn title="Bớt bảng" kind="ghost" icon="remove" small onPress={() => { const cur = editingRef.current; if (cur && cur.tableIdx === t.tables.length - 1) setEditing(null); if (!store.removeLastTable(t.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }} style={{ flex: 1 }} />
               </View>
             ) : null}
           </>
@@ -286,7 +297,7 @@ export default function TruckScreen() {
           {photos.length === 0 ? <Text style={{ color: C.muted, fontSize: 13 }}>Chụp ảnh mẫu hàng, phiếu cân giấy, xe hàng. Ảnh tự tải lên Google Drive khi đã liên kết Google Sheets.</Text> : (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
               {photos.map((p) => {
-                const uri = photoExists(p) ? p.localUri! : p.driveUrl ? driveThumb(p.driveUrl) : null;
+                const uri = photoUri(p) || (p.driveUrl ? driveThumb(p.driveUrl) : null);
                 return (
                   <Pressable key={p.id} onPress={() => setViewPhoto(p.id)} onLongPress={() => { if (readOnly) return; haptic('medium'); setDelPhoto(p.id); }} delayLongPress={600} style={st.thumbWrap}>
                     {uri ? <Image source={{ uri }} style={st.thumb} /> : <View style={[st.thumb, { alignItems: 'center', justifyContent: 'center' }]}><Ionicons name="cloud-offline-outline" size={22} color={C.muted} /></View>}
@@ -367,7 +378,7 @@ export default function TruckScreen() {
         </View>
       ) : null}
 
-      {editing ? <NumPad label={cellLabel} value={editing.text} onKey={onKey} onNext={onNext} onDone={onDone} onCancel={() => setEditing(null)} /> : null}
+      {editing && editingValid ? <NumPad label={cellLabel} value={editing.text} onKey={onKey} onNext={onNext} onDone={onDone} onCancel={() => setEditing(null)} /> : null}
 
       {/* Sheets */}
       <InputSheet visible={!!field} onClose={() => setField(null)} title={field ? FIELDS[field].title : ''} label={field ? FIELDS[field].what : undefined}
@@ -426,7 +437,7 @@ export default function TruckScreen() {
         ))}
       </Sheet>
       <Sheet visible={!!viewPhoto} onClose={() => setViewPhoto(null)} title={viewPhoto ? (PHOTO_KINDS.find((k) => k.v === store.photos[viewPhoto]?.kind)?.label || 'Ảnh') : ''}>
-        {viewPhoto && store.photos[viewPhoto] ? (() => { const p = store.photos[viewPhoto]; const uri = photoExists(p) ? p.localUri! : p.driveUrl ? driveThumb(p.driveUrl, 1600) : null; return (
+        {viewPhoto && store.photos[viewPhoto] ? (() => { const p = store.photos[viewPhoto]; const uri = photoUri(p) || (p.driveUrl ? driveThumb(p.driveUrl, 1600) : null); return (
           <>
             {uri ? <Image source={{ uri }} style={{ width: '100%', aspectRatio: 3 / 4, borderRadius: 12, backgroundColor: C.gray }} resizeMode="contain" /> : <Text style={{ color: C.muted }}>Ảnh chưa có trên máy này và chưa được tải lên Google Drive.</Text>}
             <Text style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>{p.byName ? `${p.byName} · ` : ''}{fmtDateTime(p.createdAt)}{p.driveUrl ? ' · đã lưu Google Drive' : ' · chưa tải lên'}</Text>
@@ -436,7 +447,7 @@ export default function TruckScreen() {
       <ConfirmSheet visible={!!delPhoto} onClose={() => setDelPhoto(null)} title="Xoá ảnh này?" danger confirmText="Xoá" onConfirm={() => { if (delPhoto) { const p = store.photos[delPhoto]; if (p) deletePhotoFile(p); store.removePhoto(delPhoto); } setDelPhoto(null); }} />
       <ConfirmSheet visible={!!askMode} onClose={() => setAskMode(null)} title={askMode === 'truck' ? 'Chuyển sang cân xe tải?' : 'Chuyển sang cân từng bao?'}
         desc={askMode === 'truck' ? 'Tổng thô sẽ tính bằng cân xe vào trừ cân xe ra. Các bảng bao được giữ nhưng không tính.' : 'Tổng thô sẽ tính từ các bảng bao.'} confirmText="Chuyển"
-        onConfirm={() => { if (askMode) store.setWeighMode(t.id, askMode); setAskMode(null); }} />
+        onConfirm={() => { const cur = editingRef.current; if (cur) commit(cur); setEditing(null); if (askMode) store.setWeighMode(t.id, askMode); setAskMode(null); }} />
 
       <PaymentSheet truckId={payOpen ? t.id : null} onClose={() => setPayOpen(false)} />
       <ConfirmSheet visible={!!delPay} onClose={() => setDelPay(null)} title="Xoá lần thanh toán này?" danger confirmText="Xoá" desc="Số tiền sẽ được cộng lại vào còn nợ. Việc xoá ghi vào lịch sử."

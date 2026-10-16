@@ -1,6 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { appStorage } from './storage';
+import { mergeTruck } from './merge';
 import { PRESET_TEMPLATES, tableStats, truckStats } from './calc';
 import { COLS, ROWS, nowIso, uid } from './format';
 import type { DayPrice, Driver, Hedge, HistoryKind, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, Truck, User, Warehouse, WeighTable } from './types';
@@ -496,20 +497,44 @@ export const useStore = create<Store>()(
           const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : r.type === 'seller' ? sellers : r.type === 'dayprice' ? dayPrices : r.type === 'warehouse' ? warehouses : r.type === 'product' ? products : r.type === 'sale' ? sales : r.type === 'hedge' ? hedges : r.type === 'photo' ? photos : null;
           if (!bucket) continue;
           const local = bucket[r.id];
+          if (r.type === 'truck' && local) {
+            const merged = mergeTruck(local as Truck, r as Truck);
+            if (merged !== local) { bucket[r.id] = merged; changed++; }
+            continue;
+          }
           if (!local || (r.updatedAt || '') > (local.updatedAt || '')) {
             // ảnh: giữ đường dẫn file trên máy này
             bucket[r.id] = r.type === 'photo' && local?.localUri ? { ...r, localUri: local.localUri } : r;
             changed++;
           }
         }
+        // hai máy cùng tạo "Xe N" trong ngày khi mất mạng → đánh lại số cho xe tạo sau
+        const byDate: Record<string, Truck[]> = {};
+        for (const t of Object.values(trucks)) if (!t.deleted) (byDate[t.date] || (byDate[t.date] = [])).push(t);
+        for (const list of Object.values(byDate)) {
+          list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+          const used = new Set<number>();
+          let maxSeq = 0;
+          for (const t of list) {
+            if (used.has(t.seq)) {
+              const seq = maxSeq + 1;
+              const isDefaultName = t.name === 'Xe ' + t.seq;
+              trucks[t.id] = bump(t, { seq, name: isDefaultName ? 'Xe ' + seq : t.name, history: [...t.history, { id: uid(), at: nowIso(), by: null, byName: 'Hệ thống', what: 'Đánh lại số xe (trùng khi đồng bộ)', old: t.seq, new: seq, kind: 'status' as HistoryKind }] });
+              used.add(seq); maxSeq = Math.max(maxSeq, seq); changed++;
+            } else { used.add(t.seq); maxSeq = Math.max(maxSeq, t.seq); }
+          }
+        }
         if (changed) set({ users, drivers, trucks, presets, sellers, dayPrices, warehouses, products, sales, hedges, photos });
         return changed;
       },
-      resetAll: () => set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, warehouses: {}, products: {}, sales: {}, hedges: {}, photos: {}, session: { userId: null }, settings: defaultSettings() }),
+      resetAll: () => {
+        set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, warehouses: {}, products: {}, sales: {}, hedges: {}, photos: {}, session: { userId: null }, settings: defaultSettings() });
+        get().ensureDefaultPreset();
+      },
     }),
     {
       name: 'cancaphe.v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => appStorage),
       partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, warehouses: s.warehouses, products: s.products, sales: s.sales, hedges: s.hedges, photos: s.photos, session: s.session, settings: s.settings }),
       merge: (persisted, current) => {
         const p = (persisted || {}) as any;

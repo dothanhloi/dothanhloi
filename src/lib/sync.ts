@@ -35,7 +35,7 @@ async function request(u: string, payload: unknown) {
     throw new Error('Phản hồi không phải JSON. Kiểm tra link Apps Script (phải triển khai dạng Web App, quyền "Anyone").');
   }
   if (!data.ok) throw new Error(data.error || 'Lỗi không xác định từ Google Sheets');
-  return data as { ok: true; records: SyncRecord[] };
+  return data as { ok: true; records: SyncRecord[]; serverNow?: string; skipped?: string[] };
 }
 
 export async function syncNow(opts: { full?: boolean } = {}) {
@@ -50,7 +50,9 @@ export async function syncNow(opts: { full?: boolean } = {}) {
     const pushedAt = nowIso();
     const data = await request(u, { action: 'sync', records, since: opts.full ? null : st.settings.lastSync });
     const changed = useStore.getState().mergeRecords(data.records || []);
-    useStore.getState().setSettings({ lastPush: pushedAt, lastSync: nowIso() });
+    // lastSync dùng giờ máy chủ (receivedAt) để không bỏ sót bản ghi máy khác gửi muộn
+    useStore.getState().setSettings({ lastPush: pushedAt, lastSync: data.serverNow || nowIso() });
+    if (data.skipped?.length) console.warn('Máy chủ bỏ qua bản ghi quá lớn:', data.skipped);
     const uploaded = await uploadPendingPhotos(u);
     emit({ state: 'ok', at: nowIso(), message: `Đã đồng bộ (${records.length} gửi, ${changed} nhận${uploaded ? `, ${uploaded} ảnh` : ''})` });
     return { ok: true as const, pushed: records.length, received: changed };

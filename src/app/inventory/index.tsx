@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Btn, Card, ConfirmSheet, Empty, Field, IconBtn, Input, KV, Pill, Sheet, Stats, TopBar, haptic } from '../../components/ui';
-import { fmtDateVN, fmtKg, fmtMoney, parseNum, todayStr } from '../../lib/format';
+import { fmtDateVN, fmtKg, fmtMoney, parseDate, parseNum, todayStr } from '../../lib/format';
 import { hedgeSummary, stockByWarehouse } from '../../lib/reports';
 import { activeProducts, activeWarehouses, canSeeMoney, productName, selectCurrentUser, useStore, warehouseName } from '../../lib/store';
 import { C } from '../../lib/theme';
@@ -126,7 +126,7 @@ function SaleForm({ onClose }: { onClose: () => void }) {
   function save() {
     const k = parseNum(kg);
     if (k == null || isNaN(k) || k <= 0) return toast('Nhập số kg', 'err');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('Ngày dạng YYYY-MM-DD', 'err');
+    if (!validDate(date)) return toast('Ngày dạng YYYY-MM-DD, ví dụ 2026-10-16', 'err');
     const p = parseNum(price);
     store.addSale({ date, warehouseId, productId, kg: k, price: p == null || isNaN(p) ? null : p, buyer, note });
     haptic('success');
@@ -164,6 +164,7 @@ function HedgeForm({ onClose }: { onClose: () => void }) {
   function save() {
     const l = parseNum(lots);
     if (l == null || isNaN(l) || l <= 0) return toast('Nhập số lot', 'err');
+    if (!validDate(date)) return toast('Ngày dạng YYYY-MM-DD, ví dụ 2026-10-16', 'err');
     const p = parseNum(price);
     store.addHedge({ date, lots: side === 'sell' ? l : -l, tonsPerLot: parseNum(tpl) || 10, price: p == null || isNaN(p) ? null : p, note });
     haptic('success');
@@ -187,6 +188,12 @@ function HedgeForm({ onClose }: { onClose: () => void }) {
       </View>
     </>
   );
+}
+
+function validDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = parseDate(s);
+  return !isNaN(d.getTime()) && todayStr(d) === s;
 }
 
 const st = StyleSheet.create({

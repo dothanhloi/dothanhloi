@@ -14,9 +14,25 @@ function photosDir(): Directory {
 /** Nén ảnh (tối đa 1280px, JPEG 70%) và lưu vào thư mục app */
 async function storeImage(uri: string): Promise<string> {
   const out = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 1280 } }], { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG });
-  const dest = new File(photosDir(), `${uid()}.jpg`);
+  const name = `${uid()}.jpg`;
+  const dest = new File(photosDir(), name);
   await new File(out.uri).copy(dest);
-  return dest.uri;
+  return name; // chỉ lưu tên file: thư mục app đổi sau mỗi lần cập nhật (iOS)
+}
+
+/** Tìm file ảnh trên máy từ tên file (mới) hoặc đường dẫn tuyệt đối (bản cũ) */
+export function photoFile(p: Photo): File | null {
+  if (!p.localUri) return null;
+  try {
+    const name = p.localUri.includes('/') ? p.localUri.split('/').pop() || '' : p.localUri;
+    if (name) { const f = new File(photosDir(), name); if (f.exists) return f; }
+    if (p.localUri.startsWith('file:')) { const f = new File(p.localUri); if (f.exists) return f; }
+  } catch {}
+  return null;
+}
+export function photoUri(p: Photo): string | null {
+  const f = photoFile(p);
+  return f ? f.uri : null;
 }
 
 export async function takePhoto(truckId: string, kind: Photo['kind'], fromLibrary = false): Promise<Photo | null> {
@@ -36,15 +52,15 @@ export async function takePhoto(truckId: string, kind: Photo['kind'], fromLibrar
 }
 
 export function photoExists(p: Photo): boolean {
-  try { return !!p.localUri && new File(p.localUri).exists; } catch { return false; }
+  return photoFile(p) != null;
 }
 
 export async function photoBase64(p: Photo): Promise<string | null> {
-  try { if (!p.localUri) return null; return await new File(p.localUri).base64(); } catch { return null; }
+  try { const f = photoFile(p); return f ? await f.base64() : null; } catch { return null; }
 }
 
 export function deletePhotoFile(p: Photo) {
-  try { if (p.localUri) { const f = new File(p.localUri); if (f.exists) f.delete(); } } catch {}
+  try { const f = photoFile(p); if (f) f.delete(); } catch {}
 }
 
 export const PHOTO_KINDS: { v: Photo['kind']; label: string }[] = [

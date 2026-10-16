@@ -10,6 +10,9 @@
  *     Bấm Triển khai, cấp quyền, sao chép URL (kết thúc bằng /exec).
  *  4. Dán URL vào app: Cài đặt → Liên kết Google Sheets.
  *
+ * Các trang dễ đọc được dựng lại tối đa 2 phút một lần khi có thay đổi (chạy setupTrigger() một lần
+ * để tự dựng lại mỗi 10 phút kể cả khi không ai đồng bộ).
+ *
  * Khi sửa file này, phải "Triển khai → Quản lý triển khai → Sửa → Phiên bản mới"
  * thì URL cũ mới chạy mã mới.
  *
@@ -51,11 +54,16 @@ function doPost(e) {
     }
     if (action === 'sync' || action === 'push') {
       var incoming = Array.isArray(body.records) ? body.records : [];
-      var n = upsert_(incoming);
-      if (n > 0) rebuildViews_();
-      var out = body.since ? readAll_().filter(function (r) { return (r.updatedAt || '') > body.since; }) : readAll_();
-      return json_({ ok: true, upserted: n, records: out });
+      var serverNow = new Date().toISOString();
+      var res = upsert_(incoming, serverNow);
+      if (res.changed > 0) markDirty_();
+      maybeRebuild_();
+      var all = readAllWithMeta_();
+      // trả về theo giờ máy chủ nhận (receivedAt) để máy khác gửi muộn vẫn được chuyển tiếp
+      var out = body.since ? all.filter(function (x) { return x.receivedAt > body.since; }) : all;
+      return json_({ ok: true, upserted: res.changed, skipped: res.skipped, serverNow: serverNow, records: out.map(function (x) { return x.rec; }) });
     }
+    if (action === 'rebuild') { rebuildViews_(); return json_({ ok: true }); }
     return json_({ ok: false, error: 'Hành động không hỗ trợ: ' + action });
   } catch (err) {
     return json_({ ok: false, error: String(err && err.message || err) });
@@ -101,25 +109,38 @@ function sheet_(name, headers) {
 }
 
 var CHUNK = 45000;           // Google Sheets giới hạn 50.000 ký tự / ô → chia JSON thành nhiều ô
-var DATA_COLS = 5 + 3;       // type, id, updatedAt, deleted, json1..json4 (tối đa ~180k ký tự / bản ghi)
+var JSON_COLS = 4;           // json1..json4 (tối đa ~180k ký tự / bản ghi)
+var COL_RECEIVED = 5 + JSON_COLS; // cột receivedAt (giờ máy chủ nhận)
+var DATA_COLS = COL_RECEIVED;
+var SENTINEL = '~';          // chữ đầu mỗi ô json để Sheets không hiểu nhầm thành công thức (= + -)
 
 function dataSheet_() {
-  var headers = ['type', 'id', 'updatedAt', 'deleted', 'json', 'json2', 'json3', 'json4'];
+  var headers = ['type', 'id', 'updatedAt', 'deleted', 'json', 'json2', 'json3', 'json4', 'receivedAt'];
   var sh = sheet_(SH_DATA, headers);
   if (sh.getLastColumn() < headers.length) sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
   return sh;
 }
 
+/** Chia JSON thành các ô; null nếu quá lớn */
 function splitJson_(str) {
+  if (str.length > CHUNK * JSON_COLS) return null;
   var parts = [];
-  for (var i = 0; i < str.length; i += CHUNK) parts.push(str.substring(i, i + CHUNK));
-  while (parts.length < DATA_COLS - 4) parts.push('');
-  if (parts.length > DATA_COLS - 4) throw new Error('Bản ghi quá lớn (' + str.length + ' ký tự)');
+  for (var i = 0; i < str.length; i += CHUNK) parts.push(SENTINEL + str.substring(i, i + CHUNK));
+  while (parts.length < JSON_COLS) parts.push('');
   return parts;
 }
+function joinJson_(row) {
+  var json = '';
+  for (var c = 4; c < 4 + JSON_COLS; c++) {
+    var v = row[c] === null || row[c] === undefined ? '' : String(row[c]);
+    if (v.charAt(0) === SENTINEL) v = v.substring(1); // bản cũ không có sentinel
+    json += v;
+  }
+  return json;
+}
 
-/** Đọc tất cả bản ghi từ DATA */
-function readAll_() {
+/** Đọc tất cả bản ghi kèm receivedAt */
+function readAllWithMeta_() {
   var sh = dataSheet_();
   var last = sh.getLastRow();
   if (last < 2) return [];
@@ -128,40 +149,95 @@ function readAll_() {
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
     if (!r[1]) continue;
-    var json = '';
-    for (var c = 4; c < DATA_COLS; c++) json += (r[c] === null || r[c] === undefined) ? '' : String(r[c]);
-    try { out.push(JSON.parse(json)); } catch (e) {}
+    try {
+      var rec = JSON.parse(joinJson_(r));
+      out.push({ rec: rec, receivedAt: String(r[COL_RECEIVED - 1] || r[2] || '') });
+    } catch (e) {}
   }
   return out;
 }
+function readAll_() { return readAllWithMeta_().map(function (x) { return x.rec; }); }
 
-/** Ghi đè nếu bản ghi mới hơn. Trả về số bản ghi đã thay đổi */
-function upsert_(records) {
-  if (!records.length) return 0;
+function unionById_(a, b) {
+  var m = {}, out = [];
+  (a || []).concat(b || []).forEach(function (x) { if (x && x.id && !m[x.id]) { m[x.id] = true; out.push(x); } });
+  out.sort(function (x, y) { return (x.at || '') < (y.at || '') ? -1 : 1; });
+  return out;
+}
+/** Gộp xe: bản mới hơn thắng, nhưng sổ thanh toán và lịch sử được hợp nhất để không mất dữ liệu máy khác */
+function mergeTruck_(existing, incoming) {
+  var remoteNewer = (incoming.updatedAt || '') > (existing.updatedAt || '');
+  var base = remoteNewer ? incoming : existing;
+  var other = remoteNewer ? existing : incoming;
+  var hasPayArr = Array.isArray(base.payments) || Array.isArray(other.payments);
+  var payments = hasPayArr ? unionById_(base.payments, other.payments) : null;
+  var history = unionById_(base.history, other.history);
+  var grew = (hasPayArr && payments.length !== (base.payments || []).length) || history.length !== (base.history || []).length;
+  if (!remoteNewer && !grew) return null; // không có gì mới
+  var merged = JSON.parse(JSON.stringify(base));
+  merged.history = history;
+  if (hasPayArr) {
+    merged.payments = payments;
+    var paid = 0; payments.forEach(function (x) { paid += Number(x.amount) || 0; });
+    merged.payment = merged.payment || {}; merged.payment.paidAmount = paid;
+  }
+  if (grew) merged.updatedAt = new Date().toISOString();
+  return merged;
+}
+
+/** Ghi bản ghi mới hơn (xe: gộp). Trả về {changed, skipped} */
+function upsert_(records, serverNow) {
+  var result = { changed: 0, skipped: [] };
+  if (!records.length) return result;
   var sh = dataSheet_();
   var last = sh.getLastRow();
   var index = {}; // id -> {row, updatedAt}
-  if (last >= 2) {
-    var ids = sh.getRange(2, 2, last - 1, 2).getValues();
-    for (var i = 0; i < ids.length; i++) if (ids[i][0]) index[ids[i][0]] = { row: i + 2, updatedAt: String(ids[i][1] || '') };
-  }
-  var changed = 0;
+  var rows = last >= 2 ? sh.getRange(2, 1, last - 1, DATA_COLS).getValues() : [];
+  for (var i = 0; i < rows.length; i++) if (rows[i][1]) index[rows[i][1]] = { row: i + 2, updatedAt: String(rows[i][2] || ''), raw: rows[i] };
   var appends = [];
   for (var k = 0; k < records.length; k++) {
     var r = records[k];
     if (!r || !r.id || !r.type) continue;
-    var rowVals = [r.type, r.id, r.updatedAt || '', r.deleted ? 'TRUE' : ''].concat(splitJson_(JSON.stringify(r)));
     var ex = index[r.id];
+    var toWrite = null;
     if (ex) {
-      if ((r.updatedAt || '') > ex.updatedAt) { sh.getRange(ex.row, 1, 1, DATA_COLS).setValues([rowVals]); changed++; }
-    } else {
-      appends.push(rowVals);
-      index[r.id] = { row: -1, updatedAt: r.updatedAt || '' };
-      changed++;
-    }
+      if (r.type === 'truck') {
+        var existing = null;
+        try { existing = JSON.parse(joinJson_(ex.raw)); } catch (e) {}
+        toWrite = existing ? mergeTruck_(existing, r) : r;
+      } else if ((r.updatedAt || '') > ex.updatedAt) toWrite = r;
+    } else toWrite = r;
+    if (!toWrite) continue;
+    var parts = splitJson_(JSON.stringify(toWrite));
+    if (!parts) { result.skipped.push(r.id); continue; }
+    var rowVals = [toWrite.type, toWrite.id, toWrite.updatedAt || '', toWrite.deleted ? 'TRUE' : ''].concat(parts).concat([serverNow]);
+    if (ex) sh.getRange(ex.row, 1, 1, DATA_COLS).setValues([rowVals]);
+    else { appends.push(rowVals); index[r.id] = { row: -1, updatedAt: r.updatedAt || '' }; }
+    result.changed++;
   }
   if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, DATA_COLS).setValues(appends);
-  return changed;
+  return result;
+}
+
+/* ---------------- dựng lại các trang dễ đọc có tiết chế ---------------- */
+var REBUILD_EVERY_MS = 2 * 60 * 1000;
+function markDirty_() { PropertiesService.getScriptProperties().setProperty('dirty', '1'); }
+function maybeRebuild_() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('dirty') !== '1') return;
+  var last = Number(props.getProperty('lastRebuild') || 0);
+  if (Date.now() - last < REBUILD_EVERY_MS) return;
+  try { rebuildViews_(); props.setProperty('lastRebuild', String(Date.now())); props.deleteProperty('dirty'); } catch (e) { Logger.log('rebuild: ' + e); }
+}
+/** Chạy tay một lần để tạo trigger dựng lại các trang mỗi 10 phút (khi có thay đổi) */
+function setupTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'rebuildIfDirty') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('rebuildIfDirty').timeBased().everyMinutes(10).create();
+}
+function rebuildIfDirty() {
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); var props = PropertiesService.getScriptProperties(); if (props.getProperty('dirty') === '1') { rebuildViews_(); props.setProperty('lastRebuild', String(Date.now())); props.deleteProperty('dirty'); } }
+  finally { try { lock.releaseLock(); } catch (e) {} }
 }
 
 /* ---------------- tính toán (giống app) ---------------- */
@@ -376,5 +452,5 @@ function writeSheet_(name, headers, rows) {
   if (rows.length) sh.getRange(2, 1, rows.length, headers.length).setValues(rows);
 }
 
-/** Chạy tay trong trình soạn thảo nếu muốn dựng lại các trang từ DATA */
-function rebuildNow() { rebuildViews_(); }
+/** Chạy tay trong trình soạn thảo nếu muốn dựng lại các trang từ DATA ngay */
+function rebuildNow() { rebuildViews_(); PropertiesService.getScriptProperties().deleteProperty('dirty'); }

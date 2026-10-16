@@ -128,6 +128,10 @@ Các trang tự tạo trong Sheets: **Xe**, **Chi tiết cân**, **Thanh toán**
 
 Khi sửa `Code.gs`, vào **Triển khai → Quản lý triển khai → ✏️ → Phiên bản: Mới → Triển khai** thì link cũ mới chạy mã mới.
 
+Tuỳ chọn: trong trình soạn thảo Apps Script chọn hàm `setupTrigger` và bấm Chạy một lần. Các trang dễ đọc (Xe, Công nợ, Tồn kho...) sẽ được dựng lại mỗi 10 phút khi có thay đổi, ngoài việc tự dựng lại tối đa 2 phút một lần mỗi khi có máy đồng bộ.
+
+Cách đồng bộ: mỗi máy gửi các bản ghi thay đổi, máy chủ ghi theo giờ nhận và trả về những gì máy đó chưa có. Xe được **gộp theo trường**: bản mới hơn thắng số cân và thông tin, còn sổ thanh toán và lịch sử sửa được hợp nhất từ cả hai máy nên không mất lần trả tiền ghi ở máy khác. Hai máy cùng tạo "Xe 3" khi mất mạng: xe tạo sau được đánh lại số và ghi lịch sử.
+
 App tự đồng bộ 3 giây sau mỗi thay đổi khi có mạng; không có mạng vẫn cân bình thường, sẽ gửi khi có mạng lại. Dữ liệu gộp theo thời gian cập nhật nên nhiều máy cùng dùng không ghi đè lẫn nhau (trừ khi hai máy cùng sửa đúng một xe cùng lúc – máy sửa sau thắng).
 
 ---
@@ -172,6 +176,8 @@ src/components/     WeighTable (bảng 5×5), NumPad (bàn phím số), PaymentS
 src/lib/            store (zustand + AsyncStorage), calc, reports, receipt (phiếu PDF), xlsx, photos, backup, security, sync (Google), format, types
 google-apps-script/ Code.gs – backend Google Sheets
 ```
+
+Dữ liệu trên máy lưu bằng SQLite (expo-sqlite/kv-store), không bị giới hạn 6 MB như AsyncStorage trên Android; dữ liệu cũ tự chuyển sang khi mở app.
 
 Lưu ý bảo mật: PIN được băm SHA-256 trước khi lưu và đồng bộ. Link Google Apps Script là "chìa khoá" vào dữ liệu, chỉ chia sẻ cho nhân viên.
 
