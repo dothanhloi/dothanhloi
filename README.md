@@ -55,7 +55,8 @@ npm run lint        # expo lint
    npx eas-cli@latest login
    npx eas-cli@latest init        # liên kết dự án với tài khoản Expo (tạo projectId)
    ```
-4. Mở `app.json`, đổi nếu muốn:
+4. Nếu thư mục `assets/` chưa có file PNG (icon.png, splash-icon.png, android-icon-*.png, favicon.png), tạo bằng: `pip install pillow && python3 scripts/make-icons.py assets`.
+5. Mở `app.json`, đổi nếu muốn:
    - `ios.bundleIdentifier` (hiện là `com.thanhloi.cancaphe`) – phải duy nhất trên App Store.
    - `name` – tên hiển thị dưới icon.
 
