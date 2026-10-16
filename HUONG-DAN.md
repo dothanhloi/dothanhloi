@@ -140,14 +140,14 @@ Cần tài khoản Google Play Console. Hoặc build file APK để cài trực 
 
 ### E3. Quy trình một xe hàng
 1. Trang chủ đúng ngày (mặc định hôm nay). Nhập **Giá tham chiếu** trong ngày nếu có (quản lý).
-2. Bấm **Tạo xe N** → chọn người bán (hoặc gõ tên mới), tài xế, loại hàng, kho, nhân viên cân, kiểu cân (từng bao hoặc cân xe tải) → **Tạo**.
-3. Bấm ô trống → gõ số kg → **Tiếp** để sang ô kế tiếp. Hết 25 ô, bấm **Thêm bảng**.
+2. Bấm **Tạo xe N** → chọn chủ hàng (chọn nhiều người nếu xe chở hàng của nhiều chủ, hoặc gõ tên mới), tài xế, loại hàng, kho, nhân viên cân, kiểu cân (từng bao hoặc cân xe tải) → **Tạo**.
+3. Mỗi chủ hàng là một khối riêng trên màn hình xe (CH 1, CH 2...) với bảng cân, tạp độ, giá, thanh toán và phiếu cân riêng. Bấm **Thêm chủ hàng** nếu phát sinh. Bấm ô trống → gõ số kg → **Tiếp** để sang ô kế tiếp. Hết 25 ô, bấm **Thêm bảng**.
 4. Sai số: **nhấn giữ** ô để sửa (mọi lần sửa đều ghi lịch sử).
-5. Nhập **Mẫu (g), Tạp (g), Độ (%)**, **Giá**. App tính thực nhận, thành tiền.
+5. Với từng chủ hàng: nhập **Mẫu (g), Tạp (g), Độ (%)**, **Giá**. App tính thực nhận, thành tiền riêng cho mỗi người.
 6. Chụp ảnh mẫu, phiếu giấy nếu muốn (+ Chụp).
 7. Bấm **Xong xe** → xác nhận. Bảng bị khoá; muốn sửa, nhấn giữ "Đã xong" để mở lại.
-8. Bấm **Phiếu cân (PDF)** → gửi Zalo cho người bán.
-9. Trả tiền: **Ghi thanh toán** (có thể nhiều lần, tiền mặt/chuyển khoản). Xem tổng nợ ở **Công nợ**.
+8. Bấm **Phiếu cân (PDF)** trong khối của chủ hàng → gửi Zalo cho đúng người. Icon chia sẻ trên đầu màn hình xuất phiếu của cả xe (mỗi chủ hàng một trang).
+9. Trả tiền: **Ghi thanh toán** trong khối của chủ hàng (có thể nhiều lần, tiền mặt/chuyển khoản). Xem tổng nợ theo từng người ở **Công nợ**.
 10. Bốc hàng xong: gạt **Đã bốc**.
 
 ### E4. Theo dõi

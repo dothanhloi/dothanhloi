@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Btn, Card, Empty, IconBtn, Pill, Stats, TopBar } from '../../components/ui';
-import { truckStats } from '../../lib/calc';
+import { lotStats, lotsOf } from '../../lib/calc';
 import { fmtDateShort, fmtDateVN, fmtKg, fmtMoney, fmtTime, todayStr } from '../../lib/format';
 import { GroupBy, Period, groupTrucks, periodRange, shiftAnchor, totalAgg, trucksInRange } from '../../lib/reports';
 import { canSeeMoney, driverName, productName, sellerName, useStore, userName, warehouseName } from '../../lib/store';
@@ -34,12 +34,12 @@ export default function Reports() {
     if (exporting) return;
     setExporting(true);
     try {
-      const truckRows = list.map((t) => {
-        const s = truckStats(t);
-        return [fmtDateVN(t.date), t.name, sellerName(store, t.sellerId), driverName(store, t.driverId), userName(store, t.weigherId), productName(store, t.productId), warehouseName(store, t.warehouseId),
+      const truckRows = list.flatMap((t) => lotsOf(t).map((lot) => {
+        const s = lotStats(t, lot);
+        return [fmtDateVN(t.date), t.name, sellerName(store, lot.sellerId), driverName(store, t.driverId), userName(store, t.weigherId), productName(store, lot.productId), warehouseName(store, t.warehouseId),
           t.status === 'done' ? 'Đã xong' : 'Đang cân', fmtTime(t.createdAt), s.bags, r1(s.gross), s.impurityPct == null ? '' : r2(s.impurityPct), s.moistureVal == null ? '' : s.moistureVal, r1(s.tare + s.impurity.kg + s.moisture.kg), r1(s.net),
-          ...(money ? [s.effectivePrice == null ? '' : Math.round(s.effectivePrice), s.amount == null ? '' : Math.round(s.amount), Math.round(s.paid), s.remaining == null ? '' : Math.round(s.remaining)] : []), t.note];
-      });
+          ...(money ? [s.effectivePrice == null ? '' : Math.round(s.effectivePrice), s.amount == null ? '' : Math.round(s.amount), Math.round(s.paid), s.remaining == null ? '' : Math.round(s.remaining)] : []), [t.note, lot.note].filter(Boolean).join(' · ')];
+      }));
       const truckHeader = ['Ngày', 'Xe', 'Người bán', 'Tài xế', 'Nhân viên cân', 'Loại hàng', 'Kho', 'Trạng thái', 'Giờ tạo', 'Bao', 'Thô (kg)', 'Tạp (%)', 'Độ (%)', 'Trừ (kg)', 'Thực nhận (kg)', ...(money ? ['Giá (đ/kg)', 'Thành tiền (đ)', 'Đã trả (đ)', 'Còn lại (đ)'] : []), 'Ghi chú'];
       const sheets = [{ name: 'Xe', header: truckHeader, rows: truckRows }];
       for (const g of GROUPS) {

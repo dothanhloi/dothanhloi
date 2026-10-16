@@ -13,7 +13,8 @@ Mã nguồn backend Google Sheets nằm trong `google-apps-script/Code.gs`.
 | Giao diện bảng 5 cột, mỗi cột 5 số, tổng ở dưới | Mỗi xe mặc định 2 bảng (BẢNG 1, BẢNG 2), bấm **Thêm bảng** nếu cần. Bấm ô trống → bàn phím số → **Tiếp** để nhảy sang ô trống kế tiếp. |
 | Tổng bao / Tổng thô / Trung bình | Hiện ở đầu màn hình xe, tự cập nhật. |
 | Đã thanh toán / chưa thanh toán | Thẻ **Thanh toán**: sổ trả tiền nhiều lần (tiền mặt / chuyển khoản, ai ghi, lúc nào), trạng thái tự chuyển Chưa – Một phần – Đã, còn lại. |
-| Người bán và công nợ | Mỗi xe gán **người bán** (thêm nhanh khi tạo xe). Màn hình **Công nợ** (icon ví ở trang chủ) tổng hợp còn nợ theo từng người, bấm vào trả tiền ngay. |
+| Nhiều chủ hàng trên một xe | Khi tạo xe chọn một hoặc nhiều **chủ hàng**; trên xe bấm **Thêm chủ hàng**. Mỗi chủ hàng có bảng cân, tạp độ, quy ước, giá, sổ thanh toán và **phiếu cân riêng**; xe giữ tài xế, nhân viên cân, kho, trạng thái. Cân xe tải với nhiều chủ hàng: chia kg cho từng người, app báo phần chưa chia. |
+| Người bán và công nợ | Màn hình **Công nợ** (icon ví ở trang chủ) tổng hợp còn nợ theo từng người bán trên mọi xe, bấm vào trả tiền ngay. |
 | Phiếu cân gửi Zalo | Trên xe bấm **Phiếu cân (PDF)** → chia sẻ qua Zalo, Messages hoặc lưu file. Phiếu khổ A5 có tên cơ sở (nhập ở Cài đặt), bảng từng bao, tạp độ, giá, thành tiền, đã trả, chỗ ký. |
 | Giá tham chiếu theo ngày | Thanh **Giá tham chiếu** ở trang chủ: nhập một lần, xe tạo mới trong ngày tự lấy giá, vẫn sửa riêng từng xe. |
 | Báo cáo | **Báo cáo** (lối tắt trang chủ): theo ngày / tuần / tháng / năm; nhóm theo ngày, người bán, nhân viên, tài xế, loại hàng, kho; **xuất Excel (.xlsx)** nhiều sheet. |
@@ -136,7 +137,7 @@ Máy phụ (nhân viên) lần đầu mở app: ở màn hình đăng nhập b�
 
 Cài đặt dùng chung (nhân viên thấy tiền hay không, số ngày nhắc nợ, số bảng mặc định, thông tin trên phiếu cân) được đồng bộ cho mọi máy.
 
-Cách đồng bộ: mỗi máy giữ hàng chờ các bản ghi đã đổi (không phụ thuộc đồng hồ máy), máy chủ ghi theo giờ nhận và trả về những gì máy đó chưa có. Xe được **gộp theo trường**: bản mới hơn thắng số cân và thông tin, còn sổ thanh toán và lịch sử sửa được hợp nhất từ cả hai máy nên không mất lần trả tiền ghi ở máy khác. Xe đã bấm **Xong** không bị máy khác chưa cập nhật "mở lại"; bản ghi đã xoá không bị hồi sinh bởi sửa đổi cũ. Hai máy cùng tạo "Xe 3" khi mất mạng: xe đang cân tạo sau được đánh lại số (xe đã xong giữ số vì đã in phiếu).
+Cách đồng bộ: mỗi máy giữ hàng chờ các bản ghi đã đổi (không phụ thuộc đồng hồ máy), máy chủ ghi theo giờ nhận và trả về những gì máy đó chưa có. Xe được **gộp theo trường**: bản mới hơn thắng số cân và thông tin, còn sổ thanh toán của từng chủ hàng, chủ hàng thêm ở máy khác và lịch sử sửa được hợp nhất từ cả hai máy nên không mất dữ liệu. Xe đã bấm **Xong** không bị máy khác chưa cập nhật "mở lại"; bản ghi đã xoá không bị hồi sinh bởi sửa đổi cũ. Hai máy cùng tạo "Xe 3" khi mất mạng: xe đang cân tạo sau được đánh lại số (xe đã xong giữ số vì đã in phiếu).
 
 App tự đồng bộ 3 giây sau mỗi thay đổi khi có mạng; không có mạng vẫn cân bình thường, sẽ gửi khi có mạng lại. Dữ liệu gộp theo thời gian cập nhật nên nhiều máy cùng dùng không ghi đè lẫn nhau (trừ khi hai máy cùng sửa đúng một xe cùng lúc – máy sửa sau thắng).
 

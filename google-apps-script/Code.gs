@@ -191,40 +191,45 @@ function statusFromHistory_(history) {
   for (var i = history.length - 1; i >= 0; i--) if (history[i] && history[i].what === 'Trạng thái xe') return history[i]['new'] === 'Đã xong' ? 'done' : 'weighing';
   return null;
 }
-function paymentStatusOf_(t) {
-  var s = truckStats_(t);
-  if (s.amount === null || s.amount === undefined) return s.paid > 0 ? 'partial' : (t.payment && t.payment.status === 'paid' ? 'paid' : 'unpaid');
+function paymentStatusOfLot_(t, lot) {
+  var s = lotStats_(t, lot);
+  if (s.amount === null || s.amount === undefined) return s.paid > 0 ? 'partial' : (lot.payment && lot.payment.status === 'paid' ? 'paid' : 'unpaid');
   if (s.paid >= Math.round(s.amount) - 1) return 'paid';
   return s.paid > 0 ? 'partial' : 'unpaid';
 }
 /** Gộp xe (giống merge.ts trong app): mới hơn thắng; thanh toán + lịch sử hợp nhất; "đã xong" và "đã xoá" không bị bản cũ ghi đè */
 function mergeTruck_(existing, incoming) {
+  existing = normalizeTruck_(existing); incoming = normalizeTruck_(incoming);
   var remoteNewer = (incoming.updatedAt || '') > (existing.updatedAt || '');
   var base = remoteNewer ? incoming : existing;
   var other = remoteNewer ? existing : incoming;
-  var hasPayArr = Array.isArray(base.payments) || Array.isArray(other.payments);
-  var payments = hasPayArr ? unionById_(base.payments, other.payments) : null;
+  // chủ hàng: theo id; cùng id → trường của base, thanh toán hợp nhất; chỉ ở other → thêm
+  var lotsGrew = false;
+  var lots = base.lots.map(function (bl) {
+    var ol = null; other.lots.forEach(function (l) { if (l.id === bl.id) ol = l; });
+    if (!ol) return bl;
+    var payments = unionById_(bl.payments, ol.payments);
+    if (payments.length === (bl.payments || []).length) return bl;
+    lotsGrew = true;
+    var c = JSON.parse(JSON.stringify(bl)); c.payments = payments; return c;
+  });
+  other.lots.forEach(function (ol) { if (!base.lots.some(function (l) { return l.id === ol.id; })) { lots.push(ol); lotsGrew = true; } });
   var history = unionById_(base.history, other.history);
-  var payGrew = hasPayArr && payments.length !== (base.payments || []).length;
   var histGrew = history.length !== (base.history || []).length;
   var st = statusFromHistory_(history) || base.status;
   var statusChanged = st !== base.status;
   var deleted = !!(base.deleted || other.deleted);
   var deletedChanged = deleted !== !!base.deleted;
-  if (!remoteNewer && !payGrew && !histGrew && !statusChanged && !deletedChanged) return null; // không có gì mới
-  if (remoteNewer && !payGrew && !histGrew && !statusChanged && !deletedChanged) return incoming;
+  if (!remoteNewer && !lotsGrew && !histGrew && !statusChanged && !deletedChanged) return null; // không có gì mới
+  if (remoteNewer && !lotsGrew && !histGrew && !statusChanged && !deletedChanged) return incoming;
   var merged = JSON.parse(JSON.stringify(base));
-  merged.history = history;
-  if (hasPayArr) {
-    merged.payments = payments;
-    var paid = 0; payments.forEach(function (x) { paid += Number(x.amount) || 0; });
-    merged.payment = merged.payment || {}; merged.payment.paidAmount = paid;
-    merged.payment.status = paymentStatusOf_(merged);
-  }
+  merged.lots = lots; merged.history = history;
+  if (lotsGrew) merged.lots.forEach(function (l) { l.payment = l.payment || {}; l.payment.status = paymentStatusOfLot_(merged, l); });
   if (statusChanged) {
     var src = st === 'done' ? (base.status === 'done' ? base : (other.status === 'done' ? other : base)) : null;
-    if (st === 'done') { merged.status = 'done'; merged.doneAt = src.doneAt; merged.doneBy = src.doneBy; merged.doneByName = src.doneByName; (merged.tables || []).forEach(function (tb) { tb.locked = true; }); }
-    else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; (merged.tables || []).forEach(function (tb) { tb.locked = false; }); }
+    if (st === 'done') { merged.status = 'done'; merged.doneAt = src.doneAt; merged.doneBy = src.doneBy; merged.doneByName = src.doneByName; }
+    else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; }
+    merged.lots.forEach(function (l) { (l.tables || []).forEach(function (tb) { tb.locked = st === 'done'; }); });
   }
   if (deleted) merged.deleted = true;
   merged.updatedAt = laterThan_(base.updatedAt);
@@ -264,17 +269,17 @@ function upsert_(records, serverNow, since) {
     if (idx !== undefined) {
       var existing = null;
       try { existing = JSON.parse(joinJson_(rows[idx])); } catch (e) {}
-      if (!existing) toWrite = r;
+      if (!existing) toWrite = r.type === 'truck' ? normalizeTruck_(r) : r;
       else if (r.type === 'truck') toWrite = mergeTruck_(existing, r);
       else toWrite = mergeSimple_(existing, r);
-    } else toWrite = r;
+    } else toWrite = r.type === 'truck' ? normalizeTruck_(r) : r;
     if (!toWrite) { result.accepted.push(r.id); force[r.id] = true; continue; } // máy chủ đã có bản mới hơn/khác → trả lại cho máy
     var parts = splitJson_(JSON.stringify(toWrite));
     if (!parts) { result.skipped.push(r.id); continue; }
     var rowVals = [toWrite.type, toWrite.id, toWrite.updatedAt || '', toWrite.deleted ? 'TRUE' : ''].concat(parts).concat([serverNow]);
     if (idx !== undefined) { rows[idx] = rowVals; updated[idx] = true; }
     else { index[r.id] = rows.length; rows.push(rowVals); appends.push(rowVals); }
-    if (toWrite === r) echo[r.id] = true; // lưu đúng bản máy gửi → máy đã có
+    if (toWrite === r || (r.type === 'truck' && JSON.stringify(toWrite) === JSON.stringify(normalizeTruck_(r)))) echo[r.id] = true; // lưu đúng bản máy gửi → máy đã có
     result.accepted.push(r.id);
     result.changed++;
   }
@@ -346,21 +351,39 @@ function applyRule_(rule, measured, gross) {
   }
   return { kg: 0, price: 0 };
 }
-function truckStats_(t) {
+/** Xe cũ (một chủ hàng, trường ở cấp xe) → danh sách chủ hàng */
+function lotsOf_(t) {
+  if (Array.isArray(t.lots) && t.lots.length) return t.lots;
+  var paidAmount = Number((t.payment && t.payment.paidAmount) || 0);
+  var payments = Array.isArray(t.payments) ? t.payments : (paidAmount > 0 ? [{ id: 'legacy', at: t.updatedAt, amount: paidAmount, method: 'other', byName: '', note: '' }] : []);
+  return [{ id: 'lot-' + t.id, sellerId: t.sellerId || null, productId: t.productId || null, tables: t.tables || [], sample: t.sample || {}, price: t.price == null ? null : t.price,
+    preset: t.preset || ((t.tarePerBag != null || t.moistureStd != null) ? legacyPreset_(t) : null), payments: payments, payment: { status: (t.payment && t.payment.status) || 'unpaid', note: (t.payment && t.payment.note) || '' }, note: '' }];
+}
+function normalizeTruck_(t) {
+  if (Array.isArray(t.lots) && t.lots.length) return t;
+  var n = JSON.parse(JSON.stringify(t));
+  n.lots = lotsOf_(t);
+  delete n.tables; delete n.sample; delete n.price; delete n.preset; delete n.payments; delete n.payment;
+  return n;
+}
+/** Thống kê một chủ hàng (giống lotStats trong app) */
+function lotStats_(t, lot) {
   var bags = 0, gross = 0;
+  var lots = lotsOf_(t);
   if ((t.weighMode || 'bags') === 'truck') {
     var w = t.truckWeigh || {};
-    gross = w.grossIn != null && w.tareOut != null && w.grossIn !== '' && w.tareOut !== '' ? Math.max(0, Number(w.grossIn) - Number(w.tareOut)) : 0;
-    bags = Number(w.bags) || 0;
+    var total = w.grossIn != null && w.tareOut != null && w.grossIn !== '' && w.tareOut !== '' ? Math.max(0, Number(w.grossIn) - Number(w.tareOut)) : 0;
+    if (lots.length <= 1) { gross = total; bags = Number(w.bags) || 0; }
+    else { gross = Number(lot.truckKg) || 0; bags = Number(lot.truckBags) || 0; }
   } else {
-    (t.tables || []).forEach(function (tb) {
+    (lot.tables || []).forEach(function (tb) {
       (tb.cells || []).forEach(function (col) {
         col.forEach(function (v) { if (v !== null && v !== undefined && v !== '') { bags++; gross += Number(v) || 0; } });
       });
     });
   }
-  var p = t.preset || legacyPreset_(t);
-  var sample = t.sample || {};
+  var p = lot.preset || legacyPreset_(t);
+  var sample = lot.sample || {};
   var tare = 0;
   if (p.tareMode === 'perBag') tare = bags * (Number(p.tareValue) || 0);
   else if (p.tareMode === 'percent') tare = gross * (Number(p.tareValue) || 0) / 100;
@@ -371,14 +394,27 @@ function truckStats_(t) {
   var moisture = sample.moisture != null && sample.moisture !== '' ? Number(sample.moisture) : null;
   var moi = applyRule_(p.moisture, moisture, gross);
   var net = Math.max(0, gross - tare - imp.kg - moi.kg);
-  var price = t.price != null && t.price !== '' ? Number(t.price) : null;
+  var price = lot.price != null && lot.price !== '' ? Number(lot.price) : null;
   var priceDeduct = imp.price + moi.price;
   var effectivePrice = price != null ? Math.max(0, price - priceDeduct) : null;
   var amount = effectivePrice != null ? net * effectivePrice : null;
-  var paid = Array.isArray(t.payments) ? t.payments.reduce(function (a, x) { return a + (Number(x.amount) || 0); }, 0) : Number((t.payment && t.payment.paidAmount) || 0);
+  var paid = (lot.payments || []).reduce(function (a, x) { return a + (Number(x.amount) || 0); }, 0);
   return { bags: bags, gross: gross, avg: bags ? gross / bags : 0, impurityPct: impurityPct, impurityKg: imp.kg, impurityPrice: imp.price,
     moisture: moisture, moistureKg: moi.kg, moisturePrice: moi.price, tare: tare, net: net, price: price, priceDeduct: priceDeduct,
     effectivePrice: effectivePrice, amount: amount, paid: paid, remaining: amount != null ? amount - paid : null, presetName: p.name || '' };
+}
+/** Thống kê cả xe = tổng các chủ hàng */
+function truckStats_(t) {
+  var agg = { bags: 0, gross: 0, net: 0, tare: 0, amount: null, paid: 0, remaining: null, lots: [] };
+  var any = false;
+  lotsOf_(t).forEach(function (lot) {
+    var s = lotStats_(t, lot); agg.lots.push(s);
+    agg.bags += s.bags; agg.gross += s.gross; agg.net += s.net; agg.tare += s.tare; agg.paid += s.paid;
+    if (s.amount !== null) { any = true; agg.amount = (agg.amount || 0) + s.amount; }
+  });
+  agg.avg = agg.bags ? agg.gross / agg.bags : 0;
+  agg.remaining = any ? (agg.amount || 0) - agg.paid : null;
+  return agg;
 }
 
 function fmtTime_(iso) {
@@ -421,30 +457,36 @@ function rebuildViews_() {
   var truckById = {};
   trucks.forEach(function (t) { truckById[t.id] = t; });
 
-  // Xe
-  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Người bán', 'Loại hàng', 'Kho', 'Kiểu cân', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
+  // Xe: mỗi chủ hàng một dòng
+  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Chủ hàng', 'Người bán', 'Loại hàng', 'Kho', 'Kiểu cân', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
     'Tổng bao', 'Tổng thô (kg)', 'TB/bao (kg)', 'Quy ước', 'Mẫu (g)', 'Tạp (g)', 'Tạp (%)', 'Trừ tạp (kg)', 'Trừ tạp (đ/kg)', 'Độ (%)', 'Trừ độ (kg)', 'Trừ độ (đ/kg)', 'Trừ bì (kg)',
-    'Thực nhận (kg)', 'Giá (đ/kg)', 'Giá sau trừ (đ/kg)', 'Thành tiền (đ)', 'Thanh toán', 'Đã TT (đ)', 'Còn lại (đ)', 'Ghi chú TT', 'Ghi chú', 'Số lần sửa', 'ID'];
-  var rows = trucks.map(function (t) {
-    var s = truckStats_(t);
-    return [fmtDate_(t.date), t.seq, t.name, sname(t.sellerId), pname(t.productId), wname(t.warehouseId), (t.weighMode || 'bags') === 'truck' ? 'Xe tải' : 'Từng bao', dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
-      t.status === 'done' ? 'Đã xong' : 'Đang cân', fmtTime_(t.doneAt), t.doneByName || uname(t.doneBy), t.loaded ? 'Đã bốc' : 'Chưa bốc',
-      s.bags, round1_(s.gross), round1_(s.avg), s.presetName, nz_(t.sample && t.sample.gram), nz_(t.sample && t.sample.impurityGram), s.impurityPct == null ? '' : Math.round(s.impurityPct * 100) / 100, round1_(s.impurityKg), Math.round(s.impurityPrice),
-      s.moisture == null ? '' : s.moisture, round1_(s.moistureKg), Math.round(s.moisturePrice), round1_(s.tare),
-      round1_(s.net), s.price == null ? '' : s.price, s.effectivePrice == null ? '' : Math.round(s.effectivePrice), s.amount == null ? '' : Math.round(s.amount), paymentLabel_(t.payment && t.payment.status),
-      s.paid, s.remaining == null ? '' : Math.round(s.remaining), (t.payment && t.payment.note) || '', t.note || '', (t.history || []).length, t.id];
+    'Thực nhận (kg)', 'Giá (đ/kg)', 'Giá sau trừ (đ/kg)', 'Thành tiền (đ)', 'Thanh toán', 'Đã TT (đ)', 'Còn lại (đ)', 'Ghi chú TT', 'Ghi chú', 'Số lần sửa', 'ID xe', 'ID chủ hàng'];
+  var rows = [];
+  trucks.forEach(function (t) {
+    var lots = lotsOf_(t);
+    lots.forEach(function (lot, li) {
+      var s = lotStats_(t, lot);
+      rows.push([fmtDate_(t.date), t.seq, t.name, lots.length > 1 ? (li + 1) + '/' + lots.length : '1/1', sname(lot.sellerId), pname(lot.productId), wname(t.warehouseId), (t.weighMode || 'bags') === 'truck' ? 'Xe tải' : 'Từng bao', dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
+        t.status === 'done' ? 'Đã xong' : 'Đang cân', fmtTime_(t.doneAt), t.doneByName || uname(t.doneBy), t.loaded ? 'Đã bốc' : 'Chưa bốc',
+        s.bags, round1_(s.gross), round1_(s.avg), s.presetName, nz_(lot.sample && lot.sample.gram), nz_(lot.sample && lot.sample.impurityGram), s.impurityPct == null ? '' : Math.round(s.impurityPct * 100) / 100, round1_(s.impurityKg), Math.round(s.impurityPrice),
+        s.moisture == null ? '' : s.moisture, round1_(s.moistureKg), Math.round(s.moisturePrice), round1_(s.tare),
+        round1_(s.net), s.price == null ? '' : s.price, s.effectivePrice == null ? '' : Math.round(s.effectivePrice), s.amount == null ? '' : Math.round(s.amount), paymentLabel_(lot.payment && lot.payment.status),
+        s.paid, s.remaining == null ? '' : Math.round(s.remaining), (lot.payment && lot.payment.note) || '', [t.note, lot.note].filter(Boolean).join(' · '), (t.history || []).length, t.id, lot.id]);
+    });
   });
   writeSheet_('Xe', hdr, rows);
 
   // Chi tiết cân
-  var h2 = ['Ngày', 'Xe', 'Bảng', 'Cột', 'Bao', 'Khối lượng (kg)', 'Nhân viên cân', 'Tài xế', 'ID xe'];
+  var h2 = ['Ngày', 'Xe', 'Người bán', 'Bảng', 'Cột', 'Bao', 'Khối lượng (kg)', 'Nhân viên cân', 'Tài xế', 'ID xe'];
   var r2 = [];
   trucks.forEach(function (t) {
     if ((t.weighMode || 'bags') === 'truck') return;
-    (t.tables || []).forEach(function (tb) {
-      (tb.cells || []).forEach(function (col, ci) {
-        col.forEach(function (v, ri) {
-          if (v !== null && v !== undefined && v !== '') r2.push([fmtDate_(t.date), t.name, tb.name, ci + 1, ri + 1, Number(v), uname(t.weigherId), dname(t.driverId), t.id]);
+    lotsOf_(t).forEach(function (lot) {
+      (lot.tables || []).forEach(function (tb) {
+        (tb.cells || []).forEach(function (col, ci) {
+          col.forEach(function (v, ri) {
+            if (v !== null && v !== undefined && v !== '') r2.push([fmtDate_(t.date), t.name, sname(lot.sellerId), tb.name, ci + 1, ri + 1, Number(v), uname(t.weigherId), dname(t.driverId), t.id]);
+          });
         });
       });
     });
@@ -471,8 +513,10 @@ function rebuildViews_() {
   var h4 = ['Thời gian', 'Ngày xe', 'Xe', 'Người bán', 'Số tiền (đ)', 'Hình thức', 'Người ghi', 'Ghi chú', 'ID xe'];
   var r4 = [];
   trucks.forEach(function (t) {
-    (Array.isArray(t.payments) ? t.payments : []).forEach(function (p) {
-      r4.push([fmtTime_(p.at), fmtDate_(t.date), t.name, sname(t.sellerId), Number(p.amount) || 0, p.method === 'cash' ? 'Tiền mặt' : p.method === 'transfer' ? 'Chuyển khoản' : 'Khác', p.byName || uname(p.by), p.note || '', t.id]);
+    lotsOf_(t).forEach(function (lot) {
+      (lot.payments || []).forEach(function (p) {
+        r4.push([fmtTime_(p.at), fmtDate_(t.date), t.name, sname(lot.sellerId), Number(p.amount) || 0, p.method === 'cash' ? 'Tiền mặt' : p.method === 'transfer' ? 'Chuyển khoản' : 'Khác', p.byName || uname(p.by), p.note || '', t.id]);
+      });
     });
   });
   r4.sort(function (a, b) { return a[0] < b[0] ? 1 : -1; });
@@ -481,10 +525,12 @@ function rebuildViews_() {
   // Công nợ theo người bán
   var debt = {};
   trucks.forEach(function (t) {
-    var s = truckStats_(t);
-    var k = t.sellerId || '';
-    var d = debt[k] || (debt[k] = { name: k ? (sname(k) || 'Người bán đã xoá') : 'Chưa gán người bán', trucks: 0, kg: 0, amount: 0, paid: 0 });
-    d.trucks++; d.kg += s.net; d.amount += s.amount || 0; d.paid += s.paid;
+    lotsOf_(t).forEach(function (lot) {
+      var s = lotStats_(t, lot);
+      var k = lot.sellerId || '';
+      var d = debt[k] || (debt[k] = { name: k ? (sname(k) || 'Người bán đã xoá') : 'Chưa gán người bán', trucks: 0, kg: 0, amount: 0, paid: 0 });
+      d.trucks++; d.kg += s.net; d.amount += s.amount || 0; d.paid += s.paid;
+    });
   });
   var r5 = Object.keys(debt).map(function (k) { var d = debt[k]; return [d.name, d.trucks, round1_(d.kg), Math.round(d.amount), Math.round(d.paid), Math.round(d.amount - d.paid), k]; });
   r5.sort(function (a, b) { return b[5] - a[5]; });
@@ -507,7 +553,7 @@ function rebuildViews_() {
     hedges.map(function (h) { return [fmtDate_(h.date), h.lots > 0 ? 'Bán' : 'Mua lại', Math.abs(h.lots), h.tonsPerLot, h.lots * h.tonsPerLot, h.price == null ? '' : h.price, h.note || '', h.byName || '']; }));
   photos.sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
   writeSheet_('Ảnh', ['Thời gian', 'Ngày xe', 'Xe', 'Người bán', 'Loại ảnh', 'Link Drive', 'Người chụp', 'Ghi chú'],
-    photos.map(function (p) { var t = truckById[p.truckId] || {}; return [fmtTime_(p.createdAt), fmtDate_(t.date), t.name || '', sname(t.sellerId), p.kind, p.driveUrl || '(chưa tải lên)', p.byName || '', p.note || '']; }));
+    photos.map(function (p) { var t = truckById[p.truckId] || {}; var sellers = t.id ? lotsOf_(t).map(function (l) { return sname(l.sellerId); }).filter(Boolean).join(', ') : ''; return [fmtTime_(p.createdAt), fmtDate_(t.date), t.name || '', sellers, p.kind, p.driveUrl || '(chưa tải lên)', p.byName || '', p.note || '']; }));
   writeSheet_('Kho', ['Tên', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(warehouses).map(function (k) { var x = warehouses[k]; return [x.name, x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
   writeSheet_('Loại hàng', ['Tên', 'Quy ước', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(products).map(function (k) { var x = products[k]; var pr = presets.filter(function (p) { return p.id === x.presetId; })[0]; return [x.name, pr ? pr.name : '', x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
 

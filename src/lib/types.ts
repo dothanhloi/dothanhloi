@@ -51,6 +51,23 @@ export interface HistoryEntry {
 export type PaymentStatus = 'unpaid' | 'partial' | 'paid';
 export type TruckStatus = 'weighing' | 'done';
 
+/** Một chủ hàng (lô) trong xe: bảng cân, chất lượng, giá, thanh toán riêng */
+export interface Lot {
+  id: string;
+  sellerId: string | null;
+  productId: string | null;
+  tables: WeighTable[];
+  sample: { gram: number | null; impurityGram: number | null; impurityPct?: number | null; moisture: number | null };
+  price: number | null;
+  preset: PresetSnapshot | null;
+  payments: Payment[];
+  payment: { status: PaymentStatus; note: string };
+  note: string;
+  /** cân xe tải với nhiều chủ hàng: kg và số bao chia cho lô này */
+  truckKg?: number | null;
+  truckBags?: number | null;
+}
+
 export interface Truck {
   id: string;
   type: 'truck';
@@ -76,17 +93,16 @@ export interface Truck {
   loaded: boolean;
   loadedAt: string | null;
   loadedBy: string | null;
-  tables: WeighTable[];
-  sample: { gram: number | null; impurityGram: number | null; impurityPct?: number | null; moisture: number | null };
-  price: number | null;
-  /** @deprecated dùng preset; giữ để tương thích xe cũ */
-  tarePerBag: number;
-  /** @deprecated dùng preset; giữ để tương thích xe cũ */
-  moistureStd: number;
-  /** Quy ước tạp độ áp dụng cho xe (bản sao tại thời điểm chọn) */
+  /** Các chủ hàng trong xe (từ phiên bản 2). Xe cũ được chuyển tự động từ các trường legacy bên dưới */
+  lots: Lot[];
+  /** @deprecated legacy (xe một chủ hàng) – chỉ còn để chuyển đổi */
+  tables?: WeighTable[];
+  sample?: { gram: number | null; impurityGram: number | null; impurityPct?: number | null; moisture: number | null };
+  price?: number | null;
+  tarePerBag?: number;
+  moistureStd?: number;
   preset?: PresetSnapshot | null;
-  payment: { status: PaymentStatus; paidAmount: number; note: string };
-  /** Sổ thanh toán nhiều lần. paidAmount = tổng payments (giữ để tương thích) */
+  payment?: { status: PaymentStatus; paidAmount?: number; note: string };
   payments?: Payment[];
   note: string;
   history: HistoryEntry[];

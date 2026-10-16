@@ -2,9 +2,9 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { appStorage } from './storage';
 import { laterThan, mergeSimple, mergeTruck } from './merge';
-import { PRESET_TEMPLATES, tableStats, truckStats } from './calc';
+import { PRESET_TEMPLATES, lotStats, lotsOf, newLot, normalizeTruck, tableStats } from './calc';
 import { COLS, ROWS, nowIso, uid } from './format';
-import type { DayPrice, Driver, Hedge, HistoryKind, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, TeamConfig, Truck, User, Warehouse, WeighTable } from './types';
+import type { DayPrice, Driver, Hedge, HistoryKind, Lot, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, TeamConfig, Truck, User, Warehouse, WeighTable } from './types';
 import { hashPin } from './security';
 
 export interface State {
@@ -42,17 +42,23 @@ export interface Actions {
   updateDriver: (id: string, patch: Partial<Driver>) => void;
   removeDriver: (id: string) => void;
   // trucks
-  createTruck: (d: { date: string; driverId: string | null; sellerId?: string | null; weigherId: string | null; note?: string; warehouseId?: string | null; productId?: string | null; weighMode?: 'bags' | 'truck' }) => Truck;
+  createTruck: (d: { date: string; driverId: string | null; sellerId?: string | null; sellerIds?: string[]; weigherId: string | null; note?: string; warehouseId?: string | null; productId?: string | null; weighMode?: 'bags' | 'truck' }) => Truck;
   removeTruck: (id: string) => void;
-  setCell: (truckId: string, tableIdx: number, col: number, row: number, value: number | null) => boolean;
+  setCell: (truckId: string, lotId: string, tableIdx: number, col: number, row: number, value: number | null) => boolean;
+  /** trường ở cấp xe (tên, tài xế, kho, ghi chú, cân xe tải...) */
   setField: (truckId: string, what: string, path: string[], value: unknown, kind?: HistoryKind) => boolean;
+  /** trường của một chủ hàng (giá, mẫu, tạp, độ, người bán, loại hàng, ghi chú TT...) */
+  setLotField: (truckId: string, lotId: string, what: string, path: string[], value: unknown, kind?: HistoryKind) => boolean;
   patchTruck: (truckId: string, patch: Partial<Truck>, log?: { what: string; old?: unknown; new?: unknown; kind?: HistoryKind }) => void;
+  patchLot: (truckId: string, lotId: string, patch: Partial<Lot>, log?: { what: string; old?: unknown; new?: unknown; kind?: HistoryKind }) => void;
+  addLot: (truckId: string, sellerId: string | null, productId?: string | null) => Lot | null;
+  removeLot: (truckId: string, lotId: string) => boolean;
   markDone: (truckId: string, done: boolean) => void;
   setLoaded: (truckId: string, loaded: boolean) => void;
-  setTableLocked: (truckId: string, tableIdx: number, locked: boolean) => void;
+  setTableLocked: (truckId: string, lotId: string, tableIdx: number, locked: boolean) => void;
   lockAllTables: (truckId: string, locked: boolean) => void;
-  addTable: (truckId: string) => void;
-  removeLastTable: (truckId: string) => boolean;
+  addTable: (truckId: string, lotId: string) => void;
+  removeLastTable: (truckId: string, lotId: string) => boolean;
   // catalog: kho, loại hàng
   addWarehouse: (d: { name: string; note?: string }) => Warehouse;
   updateWarehouse: (id: string, patch: Partial<Warehouse>) => void;
@@ -77,8 +83,8 @@ export interface Actions {
   updateSeller: (id: string, patch: Partial<Seller>) => void;
   removeSeller: (id: string) => void;
   // payments (sổ thanh toán)
-  addPayment: (truckId: string, d: { amount: number; method: PaymentMethod; note?: string; at?: string }) => void;
-  removePayment: (truckId: string, paymentId: string) => void;
+  addPayment: (truckId: string, lotId: string, d: { amount: number; method: PaymentMethod; note?: string; at?: string }) => void;
+  removePayment: (truckId: string, lotId: string, paymentId: string) => void;
   // day prices (giá tham chiếu theo ngày)
   setDayPrice: (date: string, price: number | null, note?: string) => void;
   // presets (quy ước tạp độ)
@@ -87,7 +93,7 @@ export interface Actions {
   removePreset: (id: string) => void;
   setDefaultPreset: (id: string) => void;
   ensureDefaultPreset: () => void;
-  applyPreset: (truckId: string, presetId: string) => void;
+  applyPreset: (truckId: string, lotId: string, presetId: string) => void;
   // settings
   setSettings: (patch: Partial<Settings>) => void;
   setTeamConfig: (patch: Partial<Omit<TeamConfig, 'id' | 'type' | 'updatedAt'>>) => void;
@@ -114,9 +120,6 @@ const defaultSettings = (): Settings => ({
 
 function emptyCells(): (number | null)[][] {
   return Array.from({ length: COLS }, () => Array.from({ length: ROWS }, () => null));
-}
-function newTable(index: number): WeighTable {
-  return { id: uid(), name: 'BẢNG ' + index, locked: false, cells: emptyCells() };
 }
 
 /** Tạo bản sao nông của record + updatedAt */
@@ -202,14 +205,12 @@ export const useStore = create<Store>()(
         set((s) => (s.drivers[id] ? { drivers: { ...s.drivers, [id]: bump(s.drivers[id], { deleted: true }) } } : {})),
 
       /* ---------- trucks ---------- */
-      createTruck: ({ date, driverId, sellerId, weigherId, note, warehouseId, productId, weighMode }) => {
+      createTruck: ({ date, driverId, sellerId, sellerIds, weigherId, note, warehouseId, productId, weighMode }) => {
         const s = get();
         const user = s.users[s.session.userId || ''] || null;
         // kể cả xe đã xoá để số thứ tự không trùng
         const seq = Object.values(s.trucks).filter((t) => t.date === date).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
         const n = Math.max(1, Number(teamConfigOf(s).tablesPerTruck) || 2);
-        const tables: WeighTable[] = [];
-        for (let i = 1; i <= n; i++) tables.push(newTable(i));
         const prod = productId ? s.products[productId] : null;
         const dp = (prod?.presetId && s.presets[prod.presetId] && !s.presets[prod.presetId].deleted ? s.presets[prod.presetId] : null) || defaultPresetOf(s);
         const dayPrice = s.dayPrices['dp-' + date];
@@ -217,9 +218,7 @@ export const useStore = create<Store>()(
         const t: Truck = {
           id: uid(), type: 'truck', date, seq, name: 'Xe ' + seq,
           driverId: driverId || null,
-          sellerId: sellerId || null,
           warehouseId: warehouseId || null,
-          productId: productId || null,
           weighMode: weighMode || 'bags',
           truckWeigh: { grossIn: null, tareOut: null, bags: null },
           weigherId: weigherId || (user ? user.id : null),
@@ -227,14 +226,7 @@ export const useStore = create<Store>()(
           updatedAt: nowIso(),
           status: 'weighing', doneAt: null, doneBy: null, doneByName: '',
           loaded: false, loadedAt: null, loadedBy: null,
-          tables,
-          sample: { gram: null, impurityGram: null, impurityPct: null, moisture: null },
-          price: price0,
-          tarePerBag: Number(s.settings.tarePerBag) || 0,
-          moistureStd: Number(s.settings.moistureStd) || 0,
-          preset: dp ? snapshotOf(dp) : null,
-          payment: { status: 'unpaid', paidAmount: 0, note: '' },
-          payments: [],
+          lots: (sellerIds && sellerIds.length ? sellerIds : [sellerId || null]).map((sid) => newLot(sid || null, dp ? snapshotOf(dp) : null, price0, n, productId || null)),
           note: note || '',
           history: price0 != null ? [{ id: uid(), at: nowIso(), by: user?.id || null, byName: user?.name || '?', what: 'Giá (theo giá ngày)', old: null, new: price0, kind: 'field' }] : [],
         };
@@ -244,22 +236,27 @@ export const useStore = create<Store>()(
       removeTruck: (id) =>
         set((s) => (s.trucks[id] ? { trucks: { ...s.trucks, [id]: bump(s.trucks[id], { deleted: true }) } } : {})),
 
-      setCell: (truckId, tableIdx, col, row, value) => {
+      setCell: (truckId, lotId, tableIdx, col, row, value) => {
         const s = get();
         const t = s.trucks[truckId];
         if (!t) return false;
-        const tb = t.tables[tableIdx];
+        const lots = lotsOf(t);
+        const li = lots.findIndex((l) => l.id === lotId);
+        const lot = lots[li];
+        if (!lot) return false;
+        const tb = lot.tables[tableIdx];
         if (!tb) return false;
         const old = tb.cells[col][row];
         if (old === value) return false;
         const user = s.users[s.session.userId || ''];
         const cells = tb.cells.map((c, ci) => (ci === col ? c.map((v, ri) => (ri === row ? value : v)) : c));
-        const tables = t.tables.map((x, i) => (i === tableIdx ? { ...x, cells } : x));
+        const tables = lot.tables.map((x, i) => (i === tableIdx ? { ...x, cells } : x));
+        const newLots = lots.map((l, i) => (i === li ? { ...l, tables } : l));
         const history = [...t.history, {
           id: uid(), at: nowIso(), by: user?.id || null, byName: user?.name || '?',
-          what: `${tb.name} · Cột ${col + 1} · Bao ${row + 1}`, old, new: value, kind: 'cell' as HistoryKind,
+          what: `${lotLabel(s, t, lot)}${tb.name} · Cột ${col + 1} · Bao ${row + 1}`, old, new: value, kind: 'cell' as HistoryKind,
         }];
-        set({ trucks: { ...s.trucks, [truckId]: bump(t, { tables, history }) } });
+        set({ trucks: { ...s.trucks, [truckId]: bump(normalizeTruck(t), { lots: newLots, history }) } });
         return true;
       },
 
@@ -267,12 +264,10 @@ export const useStore = create<Store>()(
         const s = get();
         const t = s.trucks[truckId];
         if (!t) return false;
-        // đọc giá trị cũ
         let cur: any = t;
         for (const k of path) cur = cur?.[k];
         if (cur === value) return false;
-        // ghi theo kiểu immutable
-        const next: any = { ...t };
+        const next: any = { ...normalizeTruck(t) };
         let o = next;
         for (let i = 0; i < path.length - 1; i++) {
           o[path[i]] = { ...(o[path[i]] || {}) };
@@ -288,6 +283,27 @@ export const useStore = create<Store>()(
         return true;
       },
 
+      setLotField: (truckId, lotId, what, path, value, kind = 'field') => {
+        const s = get();
+        const t = s.trucks[truckId];
+        if (!t) return false;
+        const lots = lotsOf(t);
+        const lot = lots.find((l) => l.id === lotId);
+        if (!lot) return false;
+        let cur: any = lot;
+        for (const k of path) cur = cur?.[k];
+        if (cur === value) return false;
+        const nextLot: any = { ...lot };
+        let o = nextLot;
+        for (let i = 0; i < path.length - 1; i++) {
+          o[path[i]] = { ...(o[path[i]] || {}) };
+          o = o[path[i]];
+        }
+        o[path[path.length - 1]] = value;
+        get().patchLot(truckId, lotId, nextLot as Lot, { what: `${lotLabel(s, t, lot)}${what}`, old: cur === undefined ? null : cur, new: value === undefined ? null : value, kind });
+        return true;
+      },
+
       patchTruck: (truckId, patch, log) => {
         const s = get();
         const t = s.trucks[truckId];
@@ -296,7 +312,37 @@ export const useStore = create<Store>()(
         const history = log
           ? [...t.history, { id: uid(), at: nowIso(), by: user?.id || null, byName: user?.name || '?', what: log.what, old: log.old ?? null, new: log.new ?? null, kind: log.kind || 'field' }]
           : t.history;
-        set({ trucks: { ...s.trucks, [truckId]: bump(t, { ...patch, history }) } });
+        set({ trucks: { ...s.trucks, [truckId]: bump(normalizeTruck(t), { ...patch, history }) } });
+      },
+      patchLot: (truckId, lotId, patch, log) => {
+        const t = get().trucks[truckId];
+        if (!t) return;
+        const lots = lotsOf(t).map((l) => (l.id === lotId ? { ...l, ...patch } : l));
+        get().patchTruck(truckId, { lots }, log);
+      },
+      addLot: (truckId, sellerId, productId) => {
+        const s = get();
+        const t = s.trucks[truckId];
+        if (!t) return null;
+        const prod = productId ? s.products[productId] : null;
+        const dp = (prod?.presetId && s.presets[prod.presetId] && !s.presets[prod.presetId].deleted ? s.presets[prod.presetId] : null) || defaultPresetOf(s);
+        const dayPrice = s.dayPrices['dp-' + t.date];
+        const price0 = dayPrice && !dayPrice.deleted && dayPrice.price != null ? Number(dayPrice.price) : null;
+        const lot = newLot(sellerId, dp ? snapshotOf(dp) : null, price0, Math.max(1, Number(teamConfigOf(s).tablesPerTruck) || 2), productId || null);
+        get().patchTruck(truckId, { lots: [...lotsOf(t), lot] }, { what: 'Thêm chủ hàng', old: null, new: sellerId ? s.sellers[sellerId]?.name || '' : '(chưa chọn)', kind: 'table' });
+        return lot;
+      },
+      removeLot: (truckId, lotId) => {
+        const s = get();
+        const t = s.trucks[truckId];
+        if (!t) return false;
+        const lots = lotsOf(t);
+        const lot = lots.find((l) => l.id === lotId);
+        if (!lot || lots.length <= 1) return false;
+        const st = lotStats(t, lot);
+        if (st.bags > 0 || st.gross > 0 || (lot.payments || []).length) return false;
+        get().patchTruck(truckId, { lots: lots.filter((l) => l.id !== lotId) }, { what: 'Bớt chủ hàng', old: lot.sellerId ? s.sellers[lot.sellerId]?.name || '' : '(chưa chọn)', new: null, kind: 'table' });
+        return true;
       },
       markDone: (truckId, done) => {
         const s = get();
@@ -308,7 +354,7 @@ export const useStore = create<Store>()(
           doneAt: done ? nowIso() : null,
           doneBy: done ? user?.id || null : null,
           doneByName: done ? user?.name || '' : '',
-          tables: done ? t.tables.map((tb) => ({ ...tb, locked: true })) : t.tables,
+          lots: lotsOf(t).map((l) => ({ ...l, tables: l.tables.map((tb) => ({ ...tb, locked: done })) })),
         }, { what: 'Trạng thái xe', old: done ? 'Đang cân' : 'Đã xong', new: done ? 'Đã xong' : 'Mở lại', kind: 'status' });
       },
       setLoaded: (truckId, loaded) => {
@@ -317,36 +363,39 @@ export const useStore = create<Store>()(
         get().patchTruck(truckId, { loaded, loadedAt: loaded ? nowIso() : null, loadedBy: loaded ? user?.id || null : null },
           { what: 'Bốc hàng', old: loaded ? 'Chưa bốc' : 'Đã bốc', new: loaded ? 'Đã bốc' : 'Chưa bốc', kind: 'status' });
       },
-      setTableLocked: (truckId, tableIdx, locked) => {
-        const t = get().trucks[truckId];
-        if (!t || !t.tables[tableIdx]) return;
-        get().patchTruck(truckId, { tables: t.tables.map((tb, i) => (i === tableIdx ? { ...tb, locked } : tb)) },
-          { what: `${t.tables[tableIdx].name}`, old: locked ? 'Mở' : 'Khoá', new: locked ? 'Khoá' : 'Mở', kind: 'table' });
+      setTableLocked: (truckId, lotId, tableIdx, locked) => {
+        const s = get();
+        const t = s.trucks[truckId];
+        if (!t) return;
+        const lot = lotsOf(t).find((l) => l.id === lotId);
+        if (!lot || !lot.tables[tableIdx]) return;
+        get().patchLot(truckId, lotId, { tables: lot.tables.map((tb, i) => (i === tableIdx ? { ...tb, locked } : tb)) },
+          { what: `${lotLabel(s, t, lot)}${lot.tables[tableIdx].name}`, old: locked ? 'Mở' : 'Khoá', new: locked ? 'Khoá' : 'Mở', kind: 'table' });
       },
       lockAllTables: (truckId, locked) => {
         const t = get().trucks[truckId];
         if (!t) return;
-        get().patchTruck(truckId, { tables: t.tables.map((tb) => ({ ...tb, locked })) },
+        get().patchTruck(truckId, { lots: lotsOf(t).map((l) => ({ ...l, tables: l.tables.map((tb) => ({ ...tb, locked })) })) },
           { what: 'Tất cả bảng', old: locked ? 'Mở' : 'Khoá', new: locked ? 'Khoá' : 'Mở', kind: 'table' });
       },
-      addTable: (truckId) => {
+      addTable: (truckId, lotId) => {
         const s = get();
         const t = s.trucks[truckId];
         if (!t) return;
-        const user = s.users[s.session.userId || ''];
-        const tb = newTable(t.tables.length + 1);
-        const history = [...t.history, { id: uid(), at: nowIso(), by: user?.id || null, byName: user?.name || '?', what: 'Thêm bảng', old: null, new: tb.name, kind: 'table' as HistoryKind }];
-        set({ trucks: { ...s.trucks, [truckId]: bump(t, { tables: [...t.tables, tb], history }) } });
+        const lot = lotsOf(t).find((l) => l.id === lotId);
+        if (!lot) return;
+        const tb: WeighTable = { id: uid(), name: 'BẢNG ' + (lot.tables.length + 1), locked: false, cells: emptyCells() };
+        get().patchLot(truckId, lotId, { tables: [...lot.tables, tb] }, { what: `${lotLabel(s, t, lot)}Thêm bảng`, old: null, new: tb.name, kind: 'table' });
       },
-      removeLastTable: (truckId) => {
+      removeLastTable: (truckId, lotId) => {
         const s = get();
         const t = s.trucks[truckId];
-        if (!t || t.tables.length <= 1) return false;
-        const last = t.tables[t.tables.length - 1];
+        if (!t) return false;
+        const lot = lotsOf(t).find((l) => l.id === lotId);
+        if (!lot || lot.tables.length <= 1) return false;
+        const last = lot.tables[lot.tables.length - 1];
         if (tableStats(last).bags > 0) return false;
-        const user = s.users[s.session.userId || ''];
-        const history = [...t.history, { id: uid(), at: nowIso(), by: user?.id || null, byName: user?.name || '?', what: 'Xoá bảng', old: last.name, new: null, kind: 'table' as HistoryKind }];
-        set({ trucks: { ...s.trucks, [truckId]: bump(t, { tables: t.tables.slice(0, -1), history }) } });
+        get().patchLot(truckId, lotId, { tables: lot.tables.slice(0, -1) }, { what: `${lotLabel(s, t, lot)}Xoá bảng`, old: last.name, new: null, kind: 'table' });
         return true;
       },
 
@@ -416,28 +465,32 @@ export const useStore = create<Store>()(
       removeSeller: (id) =>
         set((s) => (s.sellers[id] ? { sellers: { ...s.sellers, [id]: bump(s.sellers[id], { deleted: true }) } } : {})),
 
-      /* ---------- payments ---------- */
-      addPayment: (truckId, { amount, method, note, at }) => {
+      /* ---------- payments (theo chủ hàng) ---------- */
+      addPayment: (truckId, lotId, { amount, method, note, at }) => {
         const s = get();
         const t = s.trucks[truckId];
         if (!t) return;
+        const lot = lotsOf(t).find((l) => l.id === lotId);
+        if (!lot) return;
         const user = s.users[s.session.userId || ''];
         const p: Payment = { id: uid(), at: at || nowIso(), amount: Math.round(Number(amount) || 0), method, by: user?.id || null, byName: user?.name || '?', note: (note || '').trim() };
-        const payments = [...paymentsOf(t), p];
-        const paidAmount = payments.reduce((a, x) => a + (Number(x.amount) || 0), 0);
-        get().patchTruck(truckId, { payments, payment: { ...t.payment, paidAmount, status: paymentStatusFor({ ...t, payments }, paidAmount) } },
-          { what: `Thanh toán (${method === 'cash' ? 'tiền mặt' : method === 'transfer' ? 'chuyển khoản' : 'khác'})`, old: t.payment.paidAmount, new: paidAmount, kind: 'field' });
+        const payments = [...(lot.payments || []), p];
+        const nextLot = { ...lot, payments };
+        get().patchLot(truckId, lotId, { payments, payment: { ...lot.payment, status: lotPaymentStatus(t, nextLot) } },
+          { what: `${lotLabel(s, t, lot)}Thanh toán (${method === 'cash' ? 'tiền mặt' : method === 'transfer' ? 'chuyển khoản' : 'khác'})`, old: lotStats(t, lot).paid, new: lotStats(t, nextLot).paid, kind: 'field' });
       },
-      removePayment: (truckId, paymentId) => {
+      removePayment: (truckId, lotId, paymentId) => {
         const s = get();
         const t = s.trucks[truckId];
         if (!t || paymentId === 'legacy') return;
-        const target = paymentsOf(t).find((x) => x.id === paymentId);
+        const lot = lotsOf(t).find((l) => l.id === lotId);
+        if (!lot) return;
+        const target = (lot.payments || []).find((x) => x.id === paymentId);
         if (!target) return;
-        const payments = paymentsOf(t).filter((x) => x.id !== paymentId);
-        const paidAmount = payments.reduce((a, x) => a + (Number(x.amount) || 0), 0);
-        get().patchTruck(truckId, { payments, payment: { ...t.payment, paidAmount, status: paymentStatusFor({ ...t, payments }, paidAmount) } },
-          { what: 'Xoá lần thanh toán', old: target.amount, new: null, kind: 'field' });
+        const payments = (lot.payments || []).filter((x) => x.id !== paymentId);
+        const nextLot = { ...lot, payments };
+        get().patchLot(truckId, lotId, { payments, payment: { ...lot.payment, status: lotPaymentStatus(t, nextLot) } },
+          { what: `${lotLabel(s, t, lot)}Xoá lần thanh toán`, old: target.amount, new: null, kind: 'field' });
       },
 
       /* ---------- day prices ---------- */
@@ -480,13 +533,15 @@ export const useStore = create<Store>()(
         base.moisture = { ...base.moisture, standard: Number(s.settings.moistureStd) || 13 };
         get().addPreset({ ...base, name: tpl.name, note: tpl.desc, isDefault: true, auto: true } as any);
       },
-      applyPreset: (truckId, presetId) => {
+      applyPreset: (truckId, lotId, presetId) => {
         const s = get();
         const t = s.trucks[truckId];
         const p = s.presets[presetId];
         if (!t || !p) return;
-        const old = t.preset?.name || 'Mặc định';
-        get().patchTruck(truckId, { preset: snapshotOf(p) }, { what: 'Quy ước tạp độ', old, new: p.name, kind: 'field' });
+        const lot = lotsOf(t).find((l) => l.id === lotId);
+        if (!lot) return;
+        const old = lot.preset?.name || 'Mặc định';
+        get().patchLot(truckId, lotId, { preset: snapshotOf(p) }, { what: `${lotLabel(s, t, lot)}Quy ước tạp độ`, old, new: p.name, kind: 'field' });
       },
 
       /* ---------- cài đặt dùng chung ---------- */
@@ -525,11 +580,11 @@ export const useStore = create<Store>()(
           if (!bucket) continue;
           const local = bucket[r.id];
           if (r.type === 'truck' && local) {
-            const merged = mergeTruck(local as Truck, r as Truck);
+            const merged = mergeTruck(normalizeTruck(local as Truck), normalizeTruck(r as Truck));
             if (merged !== local) { bucket[r.id] = merged; changed++; if (merged !== r) toPush.push(r.id); } // bản gộp có phần máy chủ chưa có
             continue;
           }
-          if (!local) { bucket[r.id] = r; changed++; continue; }
+          if (!local) { bucket[r.id] = r.type === 'truck' ? normalizeTruck(r as Truck) : r; changed++; continue; }
           const merged = mergeSimple(local as any, r as any);
           if (merged === local) continue;
           // ảnh: giữ đường dẫn file trên máy này
@@ -582,6 +637,8 @@ export const useStore = create<Store>()(
         const keys = ['presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos', 'configs', 'pending'] as const;
         const filled: Record<string, unknown> = {};
         for (const k of keys) filled[k] = p[k] || {};
+        // xe một chủ hàng (bản cũ) → xe có danh sách chủ hàng
+        if (p.trucks) { const tr: Record<string, Truck> = {}; for (const [id, t] of Object.entries(p.trucks as Record<string, Truck>)) tr[id] = normalizeTruck(t); filled.trucks = tr; }
         // nâng cấp từ bản cũ (chưa có hàng chờ): đẩy những gì đổi sau lần đẩy cuối
         if (p.pending === undefined && p.settings?.lastPush) {
           const pend: Record<string, true> = {};
@@ -611,18 +668,24 @@ useStore.subscribe((s, prev) => {
   if (ids.length) { marking = true; try { s.markPending(ids); } finally { marking = false; } }
 });
 
-/* ---------- payment helpers ---------- */
-export function paymentsOf(t: Truck): Payment[] {
-  if (Array.isArray(t.payments)) return t.payments;
-  // xe cũ: chuyển paidAmount thành một lần thanh toán ảo
-  const a = Number(t.payment?.paidAmount || 0);
-  return a > 0 ? [{ id: 'legacy', at: t.updatedAt, amount: a, method: 'other', by: null, byName: '', note: 'Nhập trước khi có sổ thanh toán' }] : [];
+/* ---------- helpers chủ hàng / thanh toán ---------- */
+/** Tiền tố ghi lịch sử khi xe có nhiều chủ hàng */
+export function lotLabel(s: Pick<Store, 'sellers'>, t: Truck, lot: Lot): string {
+  const lots = lotsOf(t);
+  if (lots.length <= 1) return '';
+  const idx = lots.findIndex((l) => l.id === lot.id);
+  const name = (lot.sellerId && s.sellers?.[lot.sellerId]?.name) || `Chủ hàng ${idx + 1}`;
+  return `[${name}] `;
 }
-function paymentStatusFor(t: Truck, paid: number): Truck['payment']['status'] {
-  const s = truckStats({ ...t, payments: undefined, payment: { ...t.payment, paidAmount: paid } });
-  if (s.amount == null) return paid > 0 ? 'partial' : t.payment.status;
-  if (paid >= Math.round(s.amount) - 1) return 'paid';
-  return paid > 0 ? 'partial' : 'unpaid';
+export function lotPaymentStatus(t: Truck, lot: Lot): Truck['lots'][number]['payment']['status'] {
+  const st = lotStats(t, lot);
+  if (st.amount == null) return st.paid > 0 ? 'partial' : lot.payment?.status === 'paid' ? 'paid' : 'unpaid';
+  if (st.paid >= Math.round(st.amount) - 1) return 'paid';
+  return st.paid > 0 ? 'partial' : 'unpaid';
+}
+/** Tên các chủ hàng trong xe, nối bằng dấu phẩy */
+export function sellerNamesOf(s: Pick<Store, 'sellers'>, t: Truck): string {
+  return lotsOf(t).map((l) => (l.sellerId && s.sellers?.[l.sellerId]?.name) || '').filter(Boolean).join(', ');
 }
 
 /* ---------- preset helpers ---------- */

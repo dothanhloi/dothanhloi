@@ -4,7 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Empty, Pill, Stats, TopBar } from '../../components/ui';
-import { truckStats } from '../../lib/calc';
+import { lotStats, lotsOf } from '../../lib/calc';
 import { fmtKg, fmtMoney } from '../../lib/format';
 import { canSeeMoney, useStore } from '../../lib/store';
 import { C, shadow } from '../../lib/theme';
@@ -15,17 +15,19 @@ export function computeDebts(store: Pick<ReturnType<typeof useStore.getState>, '
   const m: Record<string, SellerDebt> = {};
   for (const t of Object.values(store.trucks)) {
     if (t.deleted) continue;
-    const key = t.sellerId || '';
-    const name = key ? store.sellers?.[key]?.name || 'Người bán đã xoá' : 'Chưa gán người bán';
-    const s = truckStats(t);
-    const d = m[key] || (m[key] = { sellerId: key, name, trucks: 0, open: 0, kg: 0, amount: 0, paid: 0, remaining: 0 });
-    d.trucks++;
-    d.kg += s.net;
-    d.amount += s.amount || 0;
-    d.paid += s.paid;
-    const rem = s.remaining != null ? s.remaining : 0;
-    d.remaining += rem;
-    if (rem > 0.5) d.open++;
+    for (const lot of lotsOf(t)) {
+      const key = lot.sellerId || '';
+      const name = key ? store.sellers?.[key]?.name || 'Người bán đã xoá' : 'Chưa gán người bán';
+      const s = lotStats(t, lot);
+      const d = m[key] || (m[key] = { sellerId: key, name, trucks: 0, open: 0, kg: 0, amount: 0, paid: 0, remaining: 0 });
+      d.trucks++;
+      d.kg += s.net;
+      d.amount += s.amount || 0;
+      d.paid += s.paid;
+      const rem = s.remaining != null ? s.remaining : 0;
+      d.remaining += rem;
+      if (rem > 0.5) d.open++;
+    }
   }
   return Object.values(m).sort((a, b) => b.remaining - a.remaining || a.name.localeCompare(b.name, 'vi'));
 }

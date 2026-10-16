@@ -1,4 +1,5 @@
-import type { DeductRule, PresetSnapshot, Truck, WeighTable } from './types';
+import type { DeductRule, Lot, PresetSnapshot, Truck, WeighTable } from './types';
+import { uid } from './format';
 
 export interface TableStats {
   colTotals: number[];
@@ -19,7 +20,9 @@ export interface DeductResult {
   label: string;
 }
 
-export interface TruckStats {
+export interface LotStats {
+  lotId: string;
+  sellerId: string | null;
   bags: number;
   gross: number;
   avg: number;
@@ -38,6 +41,21 @@ export interface TruckStats {
   presetName: string;
 }
 
+export interface TruckStats {
+  bags: number;
+  gross: number;
+  avg: number;
+  tare: number;
+  net: number;
+  amount: number | null;
+  paid: number;
+  remaining: number | null;
+  /** thống kê từng chủ hàng */
+  lots: LotStats[];
+  /** cân xe tải nhiều chủ hàng: kg chưa chia */
+  unassignedKg: number;
+}
+
 export function tableStats(tb: WeighTable): TableStats {
   const colTotals: number[] = tb.cells.map((col) => col.reduce<number>((acc, v) => acc + (v == null ? 0 : Number(v)), 0));
   const bags = tb.cells.reduce((n, col) => n + col.filter((v) => v != null).length, 0);
@@ -46,7 +64,7 @@ export function tableStats(tb: WeighTable): TableStats {
 }
 
 /** Quy ước mặc định dùng khi xe cũ chưa có preset (giữ cách tính cũ) */
-export function legacyPreset(t: Pick<Truck, 'tarePerBag' | 'moistureStd'>): PresetSnapshot {
+export function legacyPreset(t: { tarePerBag?: number; moistureStd?: number }): PresetSnapshot {
   return {
     id: 'legacy',
     name: 'Mặc định',
@@ -58,8 +76,41 @@ export function legacyPreset(t: Pick<Truck, 'tarePerBag' | 'moistureStd'>): Pres
   };
 }
 
-export function presetOf(t: Truck): PresetSnapshot {
-  return t.preset || legacyPreset(t);
+export function presetOf(lot: Lot, t?: Truck): PresetSnapshot {
+  return lot.preset || legacyPreset(t || {});
+}
+
+/** Chuyển xe cũ (một chủ hàng, trường ở cấp xe) thành xe có danh sách chủ hàng. Trả về chính `t` nếu đã đúng dạng */
+export function normalizeTruck(t: Truck): Truck {
+  if (Array.isArray(t.lots) && t.lots.length) return t;
+  const legacyPay = t.payment || { status: 'unpaid' as const, note: '' };
+  const paidAmount = Number((t.payment as any)?.paidAmount || 0);
+  const payments = Array.isArray(t.payments) ? t.payments : paidAmount > 0
+    ? [{ id: 'legacy', at: t.updatedAt, amount: paidAmount, method: 'other' as const, by: null, byName: '', note: 'Nhập trước khi có sổ thanh toán' }] : [];
+  const lot: Lot = {
+    id: 'lot-' + t.id,
+    sellerId: t.sellerId ?? null,
+    productId: t.productId ?? null,
+    tables: t.tables || [],
+    sample: t.sample || { gram: null, impurityGram: null, impurityPct: null, moisture: null },
+    price: t.price ?? null,
+    preset: t.preset || (t.tarePerBag != null || t.moistureStd != null ? legacyPreset(t) : null),
+    payments,
+    payment: { status: legacyPay.status, note: legacyPay.note || '' },
+    note: '',
+  };
+  const { tables: _t, sample: _s, price: _p, preset: _pr, payments: _pay, payment: _pm, ...rest } = t;
+  return { ...rest, lots: [lot] } as Truck;
+}
+
+export function lotsOf(t: Truck): Lot[] {
+  return Array.isArray(t.lots) && t.lots.length ? t.lots : normalizeTruck(t).lots;
+}
+
+export function newLot(sellerId: string | null, preset: PresetSnapshot | null, price: number | null, nTables = 2, productId: string | null = null): Lot {
+  const tables: WeighTable[] = [];
+  for (let i = 1; i <= Math.max(1, nTables); i++) tables.push({ id: uid(), name: 'BẢNG ' + i, locked: false, cells: Array.from({ length: 5 }, () => Array.from({ length: 5 }, () => null)) });
+  return { id: uid(), sellerId, productId, tables, sample: { gram: null, impurityGram: null, impurityPct: null, moisture: null }, price, preset, payments: [], payment: { status: 'unpaid', note: '' }, note: '' };
 }
 
 function fmt1(n: number) { return Math.round(n * 100) / 100; }
@@ -95,16 +146,18 @@ export function applyRule(rule: DeductRule, measured: number | null, gross: numb
   }
 }
 
-/** Tổng bao và tổng thô theo kiểu cân (từng bao hoặc cân xe tải) */
-export function grossOf(t: Truck): { bags: number; gross: number } {
+/** Tổng bao và tổng thô của một chủ hàng theo kiểu cân */
+export function grossOfLot(t: Truck, lot: Lot): { bags: number; gross: number } {
+  const lots = lotsOf(t);
   if ((t.weighMode || 'bags') === 'truck') {
     const w = t.truckWeigh || { grossIn: null, tareOut: null, bags: null };
-    const gross = w.grossIn != null && w.tareOut != null ? Math.max(0, Number(w.grossIn) - Number(w.tareOut)) : 0;
-    return { bags: Number(w.bags) || 0, gross };
+    const total = w.grossIn != null && w.tareOut != null ? Math.max(0, Number(w.grossIn) - Number(w.tareOut)) : 0;
+    if (lots.length <= 1) return { bags: Number(w.bags) || 0, gross: total };
+    return { bags: Number(lot.truckBags) || 0, gross: Number(lot.truckKg) || 0 };
   }
   let bags = 0;
   let gross = 0;
-  for (const tb of t.tables) {
+  for (const tb of lot.tables) {
     const s = tableStats(tb);
     bags += s.bags;
     gross += s.total;
@@ -112,35 +165,53 @@ export function grossOf(t: Truck): { bags: number; gross: number } {
   return { bags, gross };
 }
 
-export function truckStats(t: Truck): TruckStats {
-  const { bags, gross } = grossOf(t);
+export function lotStats(t: Truck, lot: Lot): LotStats {
+  const { bags, gross } = grossOfLot(t, lot);
   const avg = bags ? gross / bags : 0;
-  const p = presetOf(t);
-  const sample = t.sample || { gram: null, impurityGram: null, impurityPct: null, moisture: null };
-
-  // bì
+  const p = presetOf(lot, t);
+  const sample = lot.sample || { gram: null, impurityGram: null, impurityPct: null, moisture: null };
   let tare = 0;
   if (p.tareMode === 'perBag') tare = bags * (Number(p.tareValue) || 0);
   else if (p.tareMode === 'percent') tare = (gross * (Number(p.tareValue) || 0)) / 100;
-
-  // tạp
   let impurityPct: number | null = null;
   if (p.impurityInput === 'percent') impurityPct = sample.impurityPct != null ? Number(sample.impurityPct) : null;
   else if (sample.gram && sample.impurityGram != null) impurityPct = (Number(sample.impurityGram) / Number(sample.gram)) * 100;
   const impurity = applyRule(p.impurity, impurityPct, gross);
-
-  // độ
   const moistureVal = sample.moisture != null ? Number(sample.moisture) : null;
   const moisture = applyRule(p.moisture, moistureVal, gross);
-
   const net = Math.max(0, gross - tare - impurity.kg - moisture.kg);
-  const price = t.price != null ? Number(t.price) : null;
+  const price = lot.price != null ? Number(lot.price) : null;
   const priceDeduct = impurity.price + moisture.price;
   const effectivePrice = price != null ? Math.max(0, price - priceDeduct) : null;
   const amount = effectivePrice != null ? net * effectivePrice : null;
-  const paid = Array.isArray(t.payments) ? t.payments.reduce((a, x) => a + (Number(x.amount) || 0), 0) : Number(t.payment?.paidAmount || 0);
+  const paid = (lot.payments || []).reduce((a, x) => a + (Number(x.amount) || 0), 0);
   const remaining = amount != null ? amount - paid : null;
-  return { bags, gross, avg, tare, impurityPct, impurity, moisture, moistureVal, net, price, priceDeduct, effectivePrice, amount, paid, remaining, presetName: p.name };
+  return { lotId: lot.id, sellerId: lot.sellerId, bags, gross, avg, tare, impurityPct, impurity, moisture, moistureVal, net, price, priceDeduct, effectivePrice, amount, paid, remaining, presetName: p.name };
+}
+
+/** Thống kê cả xe = tổng các chủ hàng */
+export function truckStats(t: Truck): TruckStats {
+  const lots = lotsOf(t).map((l) => lotStats(t, l));
+  const agg: TruckStats = { bags: 0, gross: 0, avg: 0, tare: 0, net: 0, amount: null, paid: 0, remaining: null, lots, unassignedKg: 0 };
+  let anyAmount = false;
+  for (const l of lots) {
+    agg.bags += l.bags; agg.gross += l.gross; agg.tare += l.tare; agg.net += l.net; agg.paid += l.paid;
+    if (l.amount != null) { anyAmount = true; agg.amount = (agg.amount || 0) + l.amount; }
+  }
+  agg.avg = agg.bags ? agg.gross / agg.bags : 0;
+  agg.remaining = anyAmount ? (agg.amount || 0) - agg.paid : null;
+  if ((t.weighMode || 'bags') === 'truck' && lots.length > 1) {
+    const w = t.truckWeigh || { grossIn: null, tareOut: null, bags: null };
+    const total = w.grossIn != null && w.tareOut != null ? Math.max(0, Number(w.grossIn) - Number(w.tareOut)) : 0;
+    agg.unassignedKg = total - agg.gross;
+  }
+  return agg;
+}
+
+/** Tổng bao và tổng thô cả xe (tương thích) */
+export function grossOf(t: Truck): { bags: number; gross: number } {
+  const s = truckStats(t);
+  return { bags: s.bags, gross: s.gross };
 }
 
 export interface DayStats {

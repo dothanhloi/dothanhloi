@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Btn, ConfirmSheet, Empty, Field, IconBtn, Input, InputSheet, Pill, Sheet, Stats, TopBar, haptic } from '../components/ui';
 import { dayStats, truckStats } from '../lib/calc';
 import { addDays, fmtDateShort, fmtDateVN, fmtKg, fmtMoney, fmtTime, fmtWeekday, todayStr } from '../lib/format';
-import { activeDrivers, activeProducts, activeSellers, activeUsers, activeWarehouses, canSeeMoney, datesWithTrucks, dayPriceOf, driverName, selectCurrentUser, sellerName, useStore, userName } from '../lib/store';
+import { activeDrivers, activeProducts, activeSellers, activeUsers, activeWarehouses, canSeeMoney, datesWithTrucks, dayPriceOf, driverName, selectCurrentUser, sellerNamesOf, useStore, userName } from '../lib/store';
 import { reminders } from '../lib/reports';
 import { getSyncStatus, onSyncStatus, SyncStatus, syncNow } from '../lib/sync';
 import { C, shadow } from '../lib/theme';
@@ -129,11 +129,12 @@ export default function Home() {
                   <Text style={st.truckName}>{t.name}</Text>
                   {done ? <Pill text="Đã xong" color="green" small icon="checkmark-circle" /> : <Pill text="Đang cân" color="orange" small icon="time-outline" />}
                   {t.loaded ? <Pill text="Đã bốc" color="blue" small /> : null}
-                  {money && t.payment.status === 'paid' ? <Pill text="Đã TT" color="green" small /> : money && t.payment.status === 'partial' ? <Pill text="TT 1 phần" color="orange" small /> : null}
+                  {money && s.amount != null && s.remaining != null ? (s.remaining <= 0.5 ? <Pill text="Đã TT" color="green" small /> : s.paid > 0 ? <Pill text="TT 1 phần" color="orange" small /> : null) : null}
+                  {s.lots.length > 1 ? <Pill text={`${s.lots.length} chủ hàng`} color="gray" small /> : null}
                   {(t.weighMode || 'bags') === 'truck' ? <Pill text="Xe tải" color="gray" small /> : null}
                 </View>
                 <Text style={st.truckSub} numberOfLines={2}>
-                  {sellerName(store, t.sellerId) ? `${sellerName(store, t.sellerId)} · ` : ''}{driverName(store, t.driverId) ? `TX ${driverName(store, t.driverId)} · ` : ''}
+                  {sellerNamesOf(store, t) ? `${sellerNamesOf(store, t)} · ` : ''}{driverName(store, t.driverId) ? `TX ${driverName(store, t.driverId)} · ` : ''}
                   Cân: {userName(store, t.weigherId) || '—'} · Tạo {fmtTime(t.createdAt)}{done ? ` · Xong ${fmtTime(t.doneAt)}` : ''}
                 </Text>
               </View>
@@ -170,7 +171,7 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
   const sellers = activeSellers(store);
   const users = activeUsers(store);
   const [driverId, setDriverId] = useState<string | null>(null);
-  const [sellerId, setSellerId] = useState<string | null>(null);
+  const [sellerIds, setSellerIds] = useState<string[]>([]);
   const [newSeller, setNewSeller] = useState('');
   const [sellerQ, setSellerQ] = useState('');
   const products = activeProducts(store);
@@ -186,9 +187,9 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
   function create() {
     let dId = driverId;
     if (!dId && newDriver.trim()) dId = store.addDriver({ name: newDriver }).id;
-    let sId = sellerId;
-    if (!sId && newSeller.trim()) sId = store.addSeller({ name: newSeller }).id;
-    const t = store.createTruck({ date, driverId: dId, sellerId: sId, weigherId, note, productId, warehouseId, weighMode: mode });
+    const ids = [...sellerIds];
+    if (newSeller.trim()) ids.push(store.addSeller({ name: newSeller }).id);
+    const t = store.createTruck({ date, driverId: dId, sellerIds: ids, weigherId, note, productId, warehouseId, weighMode: mode });
     haptic('success');
     toast(`Đã tạo ${t.name} lúc ${fmtTime(t.createdAt)}`, 'ok');
     onCreated(t.id);
@@ -196,14 +197,14 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
 
   return (
     <>
-      <Field label="Người bán (mua của ai)">
+      <Field label={`Chủ hàng (mua của ai)${sellerIds.length > 1 ? ` · ${sellerIds.length} chủ hàng` : ''}`} hint="Chọn nhiều người nếu xe chở hàng của nhiều chủ. Có thể thêm bớt sau trên màn hình xe.">
         {sellers.length > 8 ? <Input value={sellerQ} onChangeText={setSellerQ} placeholder="Tìm người bán" style={{ marginBottom: 8, paddingVertical: 8 }} /> : null}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {sellers.filter((x) => !sellerQ.trim() || x.name.toLowerCase().includes(sellerQ.trim().toLowerCase())).slice(0, 30).map((d) => (
-            <Pill key={d.id} text={d.name} color={sellerId === d.id ? 'blue' : 'gray'} onPress={() => setSellerId(sellerId === d.id ? null : d.id)} />
+            <Pill key={d.id} text={d.name} color={sellerIds.includes(d.id) ? 'blue' : 'gray'} onPress={() => setSellerIds(sellerIds.includes(d.id) ? sellerIds.filter((x) => x !== d.id) : [...sellerIds, d.id])} />
           ))}
         </View>
-        {!sellerId ? <Input value={newSeller} onChangeText={setNewSeller} placeholder="Hoặc nhập tên người bán mới" style={{ marginTop: 8 }} /> : null}
+        <Input value={newSeller} onChangeText={setNewSeller} placeholder="Thêm tên người bán mới (nếu chưa có)" style={{ marginTop: 8 }} />
       </Field>
       <Field label="Tài xế">
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>

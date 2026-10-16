@@ -1,6 +1,6 @@
-import { truckStats } from './calc';
+import { lotStats, lotsOf } from './calc';
 import { nowIso } from './format';
-import type { PaymentStatus, Truck } from './types';
+import type { Lot, PaymentStatus, Truck } from './types';
 
 function unionById<T extends { id: string; at: string }>(a: T[] | undefined, b: T[] | undefined): T[] {
   const m = new Map<string, T>();
@@ -25,50 +25,58 @@ function statusFromHistory(history: Truck['history']): 'done' | 'weighing' | nul
   return null;
 }
 
-export function paymentStatusOf(t: Truck): PaymentStatus {
-  const s = truckStats(t);
-  if (s.amount == null) return s.paid > 0 ? 'partial' : t.payment?.status === 'paid' ? 'paid' : 'unpaid';
+export function paymentStatusOfLot(t: Truck, lot: Lot): PaymentStatus {
+  const s = lotStats(t, lot);
+  if (s.amount == null) return s.paid > 0 ? 'partial' : lot.payment?.status === 'paid' ? 'paid' : 'unpaid';
   if (s.paid >= Math.round(s.amount) - 1) return 'paid';
   return s.paid > 0 ? 'partial' : 'unpaid';
 }
 
 /**
- * Gộp bản ghi xe từ hai máy: bản mới hơn thắng các trường thường; sổ thanh toán và lịch sử
- * được hợp nhất; trạng thái "đã xong" và "đã xoá" không bị bản cũ hơn ghi đè.
+ * Gộp bản ghi xe từ hai máy: bản mới hơn thắng các trường thường; với từng chủ hàng, sổ thanh toán được hợp nhất;
+ * chủ hàng chỉ có ở một bên được giữ; lịch sử hợp nhất; "đã xong" và "đã xoá" không bị bản cũ hơn ghi đè.
  * Trả về chính `local` nếu không có gì đổi, chính `remote` nếu chỉ cần lấy bản máy chủ.
  */
 export function mergeTruck(local: Truck, remote: Truck): Truck {
   const remoteNewer = (remote.updatedAt || '') > (local.updatedAt || '');
   const base = remoteNewer ? remote : local;
   const other = remoteNewer ? local : remote;
-  const hasPayArr = Array.isArray(base.payments) || Array.isArray(other.payments);
-  const payments = hasPayArr ? unionById(base.payments, other.payments) : undefined;
-  const history = unionById(base.history, other.history);
-  const payGrew = hasPayArr && payments!.length !== (base.payments || []).length;
-  const histGrew = history.length !== (base.history || []).length;
+  const baseLots = lotsOf(base);
+  const otherLots = lotsOf(other);
 
-  // trạng thái: theo lần đổi trạng thái mới nhất trong lịch sử hợp nhất
+  // chủ hàng: theo id; cùng id → trường của base, thanh toán hợp nhất; chỉ ở other → thêm vào
+  let lotsGrew = false;
+  const lots: Lot[] = baseLots.map((bl) => {
+    const ol = otherLots.find((l) => l.id === bl.id);
+    if (!ol) return bl;
+    const payments = unionById(bl.payments, ol.payments);
+    if (payments.length === (bl.payments || []).length) return bl;
+    lotsGrew = true;
+    return { ...bl, payments };
+  });
+  for (const ol of otherLots) if (!baseLots.some((l) => l.id === ol.id)) { lots.push(ol); lotsGrew = true; }
+
+  const history = unionById(base.history, other.history);
+  const histGrew = history.length !== (base.history || []).length;
   const st = statusFromHistory(history) || base.status;
   const doneSrc = st === 'done' ? (base.status === 'done' ? base : other.status === 'done' ? other : base) : null;
   const statusChanged = st !== base.status;
-  // đã xoá là "dính": một bên xoá thì kết quả là xoá
   const deleted = !!(base.deleted || other.deleted);
   const deletedChanged = deleted !== !!base.deleted;
 
-  if (!remoteNewer && !payGrew && !histGrew && !statusChanged && !deletedChanged) return local;
-  if (remoteNewer && !payGrew && !histGrew && !statusChanged && !deletedChanged) return remote;
+  if (!remoteNewer && !lotsGrew && !histGrew && !statusChanged && !deletedChanged) return local;
+  if (remoteNewer && !lotsGrew && !histGrew && !statusChanged && !deletedChanged) return remote;
 
-  const merged: Truck = { ...base, history };
-  if (hasPayArr) {
-    merged.payments = payments;
-    merged.payment = { ...base.payment, paidAmount: payments!.reduce((a, x) => a + (Number(x.amount) || 0), 0) };
-    merged.payment.status = paymentStatusOf(merged);
-  }
+  const merged: Truck = { ...base, lots, history };
+  if (lotsGrew) merged.lots = merged.lots.map((l) => ({ ...l, payment: { ...l.payment, status: paymentStatusOfLot(merged, l) } }));
   if (statusChanged) {
     if (st === 'done' && doneSrc) {
       merged.status = 'done'; merged.doneAt = doneSrc.doneAt; merged.doneBy = doneSrc.doneBy; merged.doneByName = doneSrc.doneByName;
-      merged.tables = merged.tables.map((tb) => ({ ...tb, locked: true }));
-    } else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; merged.tables = merged.tables.map((tb) => ({ ...tb, locked: false })); }
+      merged.lots = merged.lots.map((l) => ({ ...l, tables: l.tables.map((tb) => ({ ...tb, locked: true })) }));
+    } else {
+      merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = '';
+      merged.lots = merged.lots.map((l) => ({ ...l, tables: l.tables.map((tb) => ({ ...tb, locked: false })) }));
+    }
   }
   if (deleted) merged.deleted = true;
   return { ...merged, updatedAt: laterThan(base.updatedAt) };

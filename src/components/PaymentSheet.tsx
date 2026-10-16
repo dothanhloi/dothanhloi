@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Text, View } from 'react-native';
-import { truckStats } from '../lib/calc';
+import { lotStats, lotsOf } from '../lib/calc';
 import { fmtMoney, parseNum } from '../lib/format';
 import { useStore } from '../lib/store';
 import { C } from '../lib/theme';
@@ -8,20 +8,22 @@ import { toast } from '../lib/toast';
 import type { PaymentMethod } from '../lib/types';
 import { Btn, Field, Input, Pill, Sheet, Toggle, haptic } from './ui';
 
-/** Sheet thêm một lần thanh toán cho xe */
-export function PaymentSheet({ truckId, onClose }: { truckId: string | null; onClose: () => void }) {
+/** Sheet thêm một lần thanh toán cho một chủ hàng trong xe */
+export function PaymentSheet({ truckId, lotId, onClose }: { truckId: string | null; lotId: string | null; onClose: () => void }) {
   const t = useStore((s) => (truckId ? s.trucks[truckId] : undefined));
+  const sellerName = useStore((s) => { const lot = t ? lotsOf(t).find((l) => l.id === lotId) : null; return lot?.sellerId ? s.sellers?.[lot.sellerId]?.name || '' : ''; });
   return (
-    <Sheet visible={!!truckId && !!t} onClose={onClose} title={t ? `Thanh toán · ${t.name}` : ''}>
-      {t ? <Body truckId={t.id} onClose={onClose} /> : null}
+    <Sheet visible={!!truckId && !!t && !!lotId} onClose={onClose} title={t ? `Thanh toán · ${t.name}${sellerName ? ' · ' + sellerName : ''}` : ''}>
+      {t && lotId ? <Body truckId={t.id} lotId={lotId} onClose={onClose} /> : null}
     </Sheet>
   );
 }
 
-function Body({ truckId, onClose }: { truckId: string; onClose: () => void }) {
+function Body({ truckId, lotId, onClose }: { truckId: string; lotId: string; onClose: () => void }) {
   const t = useStore((s) => s.trucks[truckId]);
   const addPayment = useStore((s) => s.addPayment);
-  const s = truckStats(t);
+  const lot = lotsOf(t).find((l) => l.id === lotId)!;
+  const s = lotStats(t, lot);
   const remaining = s.remaining != null ? Math.max(0, Math.round(s.remaining)) : null;
   const [amount, setAmount] = useState(remaining != null && remaining > 0 ? String(remaining) : '');
   const [method, setMethod] = useState<PaymentMethod>('cash');
@@ -30,7 +32,7 @@ function Body({ truckId, onClose }: { truckId: string; onClose: () => void }) {
   function save() {
     const n = parseNum(amount);
     if (n == null || isNaN(n) || n <= 0) return toast('Nhập số tiền', 'err');
-    addPayment(truckId, { amount: n, method, note });
+    addPayment(truckId, lotId, { amount: n, method, note });
     haptic('success');
     toast(`Đã ghi ${fmtMoney(n)}`, 'ok');
     onClose();

@@ -1,4 +1,4 @@
-import { truckStats } from './calc';
+import { lotStats, lotsOf, truckStats } from './calc';
 import { addDays, parseDate, todayStr } from './format';
 import { teamConfigOf, type Store } from './store';
 import type { Truck } from './types';
@@ -37,11 +37,11 @@ export interface Agg { key: string; name: string; trucks: number; bags: number; 
 function newAgg(key: string, name: string): Agg {
   return { key, name, trucks: 0, bags: 0, gross: 0, net: 0, amount: 0, paid: 0, remaining: 0, avgPrice: 0 };
 }
-function addTo(a: Agg, t: Truck) {
-  const s = truckStats(t);
+function addStats(a: Agg, s: { bags: number; gross: number; net: number; amount: number | null; paid: number; remaining: number | null }) {
   a.trucks++; a.bags += s.bags; a.gross += s.gross; a.net += s.net; a.amount += s.amount || 0; a.paid += s.paid; a.remaining += s.remaining || 0;
   a.avgPrice = a.net > 0 && a.amount > 0 ? a.amount / a.net : 0;
 }
+function addTo(a: Agg, t: Truck) { addStats(a, truckStats(t)); }
 
 export function trucksInRange(store: Pick<Store, 'trucks'>, from: string, to: string, filter?: (t: Truck) => boolean): Truck[] {
   return Object.values(store.trucks).filter((t) => !t.deleted && t.date >= from && t.date <= to && (!filter || filter(t))).sort((a, b) => (a.date === b.date ? a.seq - b.seq : a.date.localeCompare(b.date)));
@@ -52,13 +52,20 @@ export type GroupBy = 'seller' | 'weigher' | 'driver' | 'product' | 'warehouse' 
 export function groupTrucks(store: Store, list: Truck[], by: GroupBy): Agg[] {
   const m: Record<string, Agg> = {};
   for (const t of list) {
+    if (by === 'seller' || by === 'product') {
+      // theo từng chủ hàng trong xe
+      for (const lot of lotsOf(t)) {
+        const key = (by === 'seller' ? lot.sellerId : lot.productId) || '';
+        const name = by === 'seller' ? (key ? store.sellers?.[key]?.name || 'Người bán đã xoá' : 'Chưa gán') : (key ? store.products?.[key]?.name || '?' : 'Chưa phân loại');
+        addStats(m[key] || (m[key] = newAgg(key, name)), lotStats(t, lot));
+      }
+      continue;
+    }
     let key = '';
     let name = '';
     switch (by) {
-      case 'seller': key = t.sellerId || ''; name = key ? store.sellers?.[key]?.name || 'Người bán đã xoá' : 'Chưa gán'; break;
       case 'weigher': key = t.weigherId || ''; name = key ? store.users[key]?.name || '?' : 'Chưa gán'; break;
       case 'driver': key = t.driverId || ''; name = key ? store.drivers[key]?.name || '?' : 'Chưa gán'; break;
-      case 'product': key = t.productId || ''; name = key ? store.products?.[key]?.name || '?' : 'Chưa phân loại'; break;
       case 'warehouse': key = t.warehouseId || ''; name = key ? store.warehouses?.[key]?.name || '?' : 'Chưa gán kho'; break;
       case 'date': key = t.date; name = t.date; break;
     }
@@ -120,15 +127,16 @@ export function reminders(store: Store): Reminder[] {
   for (const t of Object.values(store.trucks)) {
     if (t.deleted) continue;
     if (t.status !== 'done' && t.date < today) out.push({ kind: 'unfinished', text: `${t.name} ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} chưa bấm xong xe`, truckId: t.id });
-    if (t.status === 'done' && t.price == null) out.push({ kind: 'noprice', text: `${t.name} ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} đã xong nhưng chưa có giá`, truckId: t.id });
+    if (t.status === 'done' && lotsOf(t).some((l) => l.price == null)) out.push({ kind: 'noprice', text: `${t.name} ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} đã xong nhưng chưa có giá`, truckId: t.id });
     if (t.status === 'done' && !t.loaded && t.date < today) out.push({ kind: 'unloaded', text: `${t.name} ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} chưa đánh dấu bốc hàng`, truckId: t.id });
-    const s = truckStats(t);
-    if (s.remaining != null && s.remaining > 0.5 && t.status === 'done' && t.doneAt) {
+    if (t.status === 'done' && t.doneAt) {
       const days = Math.floor((Date.now() - new Date(t.doneAt).getTime()) / 86400000);
-      if (days >= dueDays) {
-        const k = t.sellerId || '';
+      if (days >= dueDays) for (const lot of lotsOf(t)) {
+        const ls = lotStats(t, lot);
+        if (ls.remaining == null || ls.remaining <= 0.5) continue;
+        const k = lot.sellerId || '';
         const o = overdueBySeller[k] || (overdueBySeller[k] = { name: k ? store.sellers?.[k]?.name || 'Người bán đã xoá' : 'Chưa gán người bán', amount: 0, n: 0 });
-        o.amount += s.remaining; o.n++;
+        o.amount += ls.remaining; o.n++;
       }
     }
   }

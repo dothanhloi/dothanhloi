@@ -7,7 +7,7 @@ import { C } from '../lib/theme';
 import type { WeighTable as WT } from '../lib/types';
 import { Pill } from './ui';
 
-export interface EditingCell { tableIdx: number; col: number; row: number; text: string }
+export interface EditingCell { lotId: string; tableIdx: number; col: number; row: number; text: string }
 
 interface Props {
   table: WT;
