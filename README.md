@@ -12,7 +12,10 @@ Mã nguồn backend Google Sheets nằm trong `google-apps-script/Code.gs`.
 |---|---|
 | Giao diện bảng 5 cột, mỗi cột 5 số, tổng ở dưới | Mỗi xe mặc định 2 bảng (BẢNG 1, BẢNG 2), bấm **Thêm bảng** nếu cần. Bấm ô trống → bàn phím số → **Tiếp** để nhảy sang ô trống kế tiếp. |
 | Tổng bao / Tổng thô / Trung bình | Hiện ở đầu màn hình xe, tự cập nhật. |
-| Đã thanh toán / chưa thanh toán | Thẻ **Thanh toán**: Chưa – Một phần – Đã thanh toán, số tiền đã trả, còn lại. |
+| Đã thanh toán / chưa thanh toán | Thẻ **Thanh toán**: sổ trả tiền nhiều lần (tiền mặt / chuyển khoản, ai ghi, lúc nào), trạng thái tự chuyển Chưa – Một phần – Đã, còn lại. |
+| Người bán và công nợ | Mỗi xe gán **người bán** (thêm nhanh khi tạo xe). Màn hình **Công nợ** (icon ví ở trang chủ) tổng hợp còn nợ theo từng người, bấm vào trả tiền ngay. |
+| Phiếu cân gửi Zalo | Trên xe bấm **Phiếu cân (PDF)** → chia sẻ qua Zalo, Messages hoặc lưu file. Phiếu khổ A5 có tên cơ sở (nhập ở Cài đặt), bảng từng bao, tạp độ, giá, thành tiền, đã trả, chỗ ký. |
+| Giá tham chiếu theo ngày | Thanh **Giá tham chiếu** ở trang chủ: nhập một lần, xe tạo mới trong ngày tự lấy giá, vẫn sửa riêng từng xe. |
 | Chất lượng: mẫu (g), tạp, độ | Thẻ **Chất lượng & giá**: chọn **quy ước tạp độ**, nhập Mẫu (g), Tạp (g hoặc %), Độ (%) → app trừ theo quy ước → **Thực nhận**, **Giá sau trừ**. |
 | Giá cà phê | Nhập giá đ/kg → tự tính **Thành tiền** = thực nhận × giá. |
 | Sửa phải nhấn giữ, lưu lịch sử | Ô đã có số hoặc trường đã điền: bấm thường chỉ báo “Nhấn giữ để sửa”. Nhấn giữ ~0,5 giây mới sửa. Mọi thay đổi ghi vào **Lịch sử sửa** (ai, lúc nào, cũ → mới). |
@@ -112,7 +115,7 @@ Làm 1 lần trên tài khoản Google của bạn:
 5. Trong app: **Cài đặt → Liên kết Google Sheets** → dán link → **Lưu & kiểm tra kết nối**.
 6. Dán cùng link trên điện thoại của mọi nhân viên để dùng chung dữ liệu (nhân viên, tài xế, xe đều được đồng bộ).
 
-Các trang tự tạo trong Sheets: **Xe** (tổng kết từng xe), **Chi tiết cân** (từng bao), **Lịch sử sửa**, **Nhân viên**, **Tài xế**, **DATA** (dữ liệu gốc – không sửa tay).
+Các trang tự tạo trong Sheets: **Xe** (tổng kết từng xe), **Chi tiết cân** (từng bao), **Thanh toán**, **Công nợ**, **Lịch sử sửa**, **Người bán**, **Giá ngày**, **Quy ước**, **Nhân viên**, **Tài xế**, **DATA** (dữ liệu gốc – không sửa tay).
 
 Khi sửa `Code.gs`, vào **Triển khai → Quản lý triển khai → ✏️ → Phiên bản: Mới → Triển khai** thì link cũ mới chạy mã mới.
 
@@ -151,9 +154,10 @@ src/app/            màn hình (Expo Router)
   index.tsx         danh sách xe theo ngày, tạo xe
   truck/[id].tsx    chi tiết xe: bảng cân, chất lượng, giá, thanh toán, xong xe
   history/[id].tsx  lịch sử sửa của xe
-  settings/         nhân viên, tài xế, quy ước tạp độ, Google Sheets, sao lưu
-src/components/     WeighTable (bảng 5×5), NumPad (bàn phím số), ui (thành phần chung)
-src/lib/            store (zustand + AsyncStorage), calc, sync (Google), format, types
+  settings/         nhân viên, người bán, tài xế, quy ước tạp độ, Google Sheets, thông tin phiếu, sao lưu
+  debts/            công nợ theo người bán, chi tiết từng người
+src/components/     WeighTable (bảng 5×5), NumPad (bàn phím số), PaymentSheet, ui (thành phần chung)
+src/lib/            store (zustand + AsyncStorage), calc, receipt (phiếu PDF), sync (Google), format, types
 google-apps-script/ Code.gs – backend Google Sheets
 ```
 

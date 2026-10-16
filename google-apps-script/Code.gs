@@ -18,6 +18,9 @@
  *   Xe            : mỗi xe một dòng + tổng kết
  *   Chi tiết cân  : từng bao
  *   Lịch sử sửa   : mọi thay đổi (ai, lúc nào, cũ → mới)
+ *   Thanh toán    : từng lần trả tiền
+ *   Công nợ       : tổng còn nợ theo người bán
+ *   Người bán, Giá ngày
  *   Quy ước      : các quy ước tạp/độ
  *   Nhân viên, Tài xế
  */
@@ -170,7 +173,7 @@ function truckStats_(t) {
   var priceDeduct = imp.price + moi.price;
   var effectivePrice = price != null ? Math.max(0, price - priceDeduct) : null;
   var amount = effectivePrice != null ? net * effectivePrice : null;
-  var paid = Number((t.payment && t.payment.paidAmount) || 0);
+  var paid = Array.isArray(t.payments) ? t.payments.reduce(function (a, x) { return a + (Number(x.amount) || 0); }, 0) : Number((t.payment && t.payment.paidAmount) || 0);
   return { bags: bags, gross: gross, avg: bags ? gross / bags : 0, impurityPct: impurityPct, impurityKg: imp.kg, impurityPrice: imp.price,
     moisture: moisture, moistureKg: moi.kg, moisturePrice: moi.price, tare: tare, net: net, price: price, priceDeduct: priceDeduct,
     effectivePrice: effectivePrice, amount: amount, paid: paid, remaining: amount != null ? amount - paid : null, presetName: p.name || '' };
@@ -193,24 +196,27 @@ function round1_(n) { return Math.round((Number(n) || 0) * 10) / 10; }
 /* ---------------- các trang dễ đọc ---------------- */
 function rebuildViews_() {
   var all = readAll_();
-  var users = {}, drivers = {}, trucks = [], presets = [];
+  var users = {}, drivers = {}, sellers = {}, trucks = [], presets = [], dayPrices = [];
   all.forEach(function (r) {
     if (r.type === 'user') users[r.id] = r;
     else if (r.type === 'driver') drivers[r.id] = r;
+    else if (r.type === 'seller') sellers[r.id] = r;
+    else if (r.type === 'dayprice') dayPrices.push(r);
     else if (r.type === 'preset') presets.push(r);
     else if (r.type === 'truck' && !r.deleted) trucks.push(r);
   });
   trucks.sort(function (a, b) { return a.date === b.date ? (a.seq || 0) - (b.seq || 0) : (a.date < b.date ? 1 : -1); });
   var uname = function (id) { return (id && users[id] && users[id].name) || ''; };
   var dname = function (id) { return (id && drivers[id] && drivers[id].name) || ''; };
+  var sname = function (id) { return (id && sellers[id] && sellers[id].name) || ''; };
 
   // Xe
-  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
+  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Người bán', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
     'Tổng bao', 'Tổng thô (kg)', 'TB/bao (kg)', 'Quy ước', 'Mẫu (g)', 'Tạp (g)', 'Tạp (%)', 'Trừ tạp (kg)', 'Trừ tạp (đ/kg)', 'Độ (%)', 'Trừ độ (kg)', 'Trừ độ (đ/kg)', 'Trừ bì (kg)',
     'Thực nhận (kg)', 'Giá (đ/kg)', 'Giá sau trừ (đ/kg)', 'Thành tiền (đ)', 'Thanh toán', 'Đã TT (đ)', 'Còn lại (đ)', 'Ghi chú TT', 'Ghi chú', 'Số lần sửa', 'ID'];
   var rows = trucks.map(function (t) {
     var s = truckStats_(t);
-    return [fmtDate_(t.date), t.seq, t.name, dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
+    return [fmtDate_(t.date), t.seq, t.name, sname(t.sellerId), dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
       t.status === 'done' ? 'Đã xong' : 'Đang cân', fmtTime_(t.doneAt), t.doneByName || uname(t.doneBy), t.loaded ? 'Đã bốc' : 'Chưa bốc',
       s.bags, round1_(s.gross), round1_(s.avg), s.presetName, nz_(t.sample && t.sample.gram), nz_(t.sample && t.sample.impurityGram), s.impurityPct == null ? '' : Math.round(s.impurityPct * 100) / 100, round1_(s.impurityKg), Math.round(s.impurityPrice),
       s.moisture == null ? '' : s.moisture, round1_(s.moistureKg), Math.round(s.moisturePrice), round1_(s.tare),
@@ -249,6 +255,33 @@ function rebuildViews_() {
 
   // Nhân viên, Tài xế
   writeSheet_('Nhân viên', ['Tên', 'Vai trò', 'Trạng thái', 'Tạo lúc', 'ID'], Object.keys(users).map(function (k) { var u = users[k]; return [u.name, u.role === 'admin' ? 'Quản lý' : 'Nhân viên', u.deleted ? 'Đã xoá' : 'Hoạt động', fmtTime_(u.createdAt), u.id]; }));
+  // Thanh toán
+  var h4 = ['Thời gian', 'Ngày xe', 'Xe', 'Người bán', 'Số tiền (đ)', 'Hình thức', 'Người ghi', 'Ghi chú', 'ID xe'];
+  var r4 = [];
+  trucks.forEach(function (t) {
+    (Array.isArray(t.payments) ? t.payments : []).forEach(function (p) {
+      r4.push([fmtTime_(p.at), fmtDate_(t.date), t.name, sname(t.sellerId), Number(p.amount) || 0, p.method === 'cash' ? 'Tiền mặt' : p.method === 'transfer' ? 'Chuyển khoản' : 'Khác', p.byName || uname(p.by), p.note || '', t.id]);
+    });
+  });
+  r4.sort(function (a, b) { return a[0] < b[0] ? 1 : -1; });
+  writeSheet_('Thanh toán', h4, r4);
+
+  // Công nợ theo người bán
+  var debt = {};
+  trucks.forEach(function (t) {
+    var s = truckStats_(t);
+    var k = t.sellerId || '';
+    var d = debt[k] || (debt[k] = { name: k ? (sname(k) || 'Người bán đã xoá') : 'Chưa gán người bán', trucks: 0, kg: 0, amount: 0, paid: 0 });
+    d.trucks++; d.kg += s.net; d.amount += s.amount || 0; d.paid += s.paid;
+  });
+  var r5 = Object.keys(debt).map(function (k) { var d = debt[k]; return [d.name, d.trucks, round1_(d.kg), Math.round(d.amount), Math.round(d.paid), Math.round(d.amount - d.paid), k]; });
+  r5.sort(function (a, b) { return b[5] - a[5]; });
+  writeSheet_('Công nợ', ['Người bán', 'Số xe', 'Thực nhận (kg)', 'Thành tiền (đ)', 'Đã trả (đ)', 'Còn nợ (đ)', 'ID'], r5);
+
+  writeSheet_('Người bán', ['Tên', 'SĐT', 'Địa chỉ', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(sellers).map(function (k) { var x = sellers[k]; return [x.name, x.phone || '', x.address || '', x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
+  dayPrices.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+  writeSheet_('Giá ngày', ['Ngày', 'Giá (đ/kg)', 'Ghi chú', 'Người nhập', 'Cập nhật'], dayPrices.filter(function (x) { return !x.deleted; }).map(function (x) { return [fmtDate_(x.date), x.price == null ? '' : x.price, x.note || '', x.byName || '', fmtTime_(x.updatedAt)]; }));
+
   writeSheet_('Quy ước', ['Tên', 'Mặc định', 'Nhập tạp', 'Tạp: cách trừ', 'Tạp chuẩn (%)', 'Tạp: mức trừ', 'Tạp: bảng', 'Độ: cách trừ', 'Độ chuẩn (%)', 'Độ: mức trừ', 'Độ: bảng', 'Bì', 'Ghi chú', 'Trạng thái', 'ID'],
     presets.map(function (p) {
       var rt = function (r) { return (r.table || []).map(function (x) { return '≤' + x.upTo + '%: ' + x.value + (r.tableUnit === 'price' ? ' đ/kg' : '% kg'); }).join('; '); };

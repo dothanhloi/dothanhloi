@@ -55,6 +55,7 @@ export interface Truck {
   seq: number;
   name: string;
   driverId: string | null;
+  sellerId?: string | null;
   weigherId: string | null;
   createdAt: string;
   createdBy: string | null;
@@ -77,12 +78,14 @@ export interface Truck {
   /** Quy ước tạp độ áp dụng cho xe (bản sao tại thời điểm chọn) */
   preset?: PresetSnapshot | null;
   payment: { status: PaymentStatus; paidAmount: number; note: string };
+  /** Sổ thanh toán nhiều lần. paidAmount = tổng payments (giữ để tương thích) */
+  payments?: Payment[];
   note: string;
   history: HistoryEntry[];
   deleted?: boolean;
 }
 
-export type SyncRecord = User | Driver | Truck | QualityPreset;
+export type SyncRecord = User | Driver | Truck | QualityPreset | Seller | DayPrice;
 
 export interface Settings {
   sheetUrl: string;
@@ -93,6 +96,7 @@ export interface Settings {
   tarePerBag: number;
   tablesPerTruck: number;
   defaultPresetId?: string | null;
+  company?: Company;
 }
 
 /* ---------- Quy ước tạp / độ (preset) ---------- */
@@ -138,3 +142,46 @@ export interface QualityPreset {
 
 /** Bản sao quy ước lưu trong xe (không gồm metadata) */
 export type PresetSnapshot = Pick<QualityPreset, 'id' | 'name' | 'tareMode' | 'tareValue' | 'impurityInput' | 'impurity' | 'moisture'>;
+
+/* ---------- Người bán, thanh toán, giá ngày ---------- */
+export interface Seller {
+  id: string;
+  type: 'seller';
+  name: string;
+  phone: string;
+  address: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+export type PaymentMethod = 'cash' | 'transfer' | 'other';
+
+export interface Payment {
+  id: string;
+  at: string;
+  amount: number;
+  method: PaymentMethod;
+  by: string | null;
+  byName: string;
+  note: string;
+}
+
+export interface DayPrice {
+  id: string; // 'dp-' + date
+  type: 'dayprice';
+  date: string;
+  price: number | null;
+  note: string;
+  byName: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+export interface Company {
+  name: string;
+  phone: string;
+  address: string;
+  footer: string;
+}

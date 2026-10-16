@@ -27,7 +27,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     useStore.getState().ensureDefaultPreset();
     syncNow();
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets) scheduleSync();
+      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets || s.sellers !== prev.sellers || s.dayPrices !== prev.dayPrices) scheduleSync();
     });
     return unsub;
   }, [hydrated]);

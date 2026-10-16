@@ -28,9 +28,9 @@ export default function History() {
 
   const resolveName = (h: HistoryEntry) => (h.by && users[h.by]?.name) || h.byName;
   const resolveVal = (h: HistoryEntry, v: unknown) => {
-    if (/tài xế|nhân viên/i.test(h.what) && typeof v === 'string') {
+    if (/tài xế|nhân viên|người bán/i.test(h.what) && typeof v === 'string') {
       const st = useStore.getState();
-      return st.users[v]?.name || st.drivers[v]?.name || v;
+      return st.users[v]?.name || st.drivers[v]?.name || st.sellers?.[v]?.name || v;
     }
     return show(v, h.what);
   };

@@ -3,10 +3,10 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Avatar, Btn, ConfirmSheet, Empty, Field, IconBtn, Input, Pill, Sheet, Stats, TopBar, haptic } from '../components/ui';
+import { Avatar, Btn, ConfirmSheet, Empty, Field, IconBtn, Input, InputSheet, Pill, Sheet, Stats, TopBar, haptic } from '../components/ui';
 import { dayStats, truckStats } from '../lib/calc';
 import { addDays, fmtDateShort, fmtDateVN, fmtKg, fmtMoney, fmtTime, fmtWeekday, todayStr } from '../lib/format';
-import { activeDrivers, activeUsers, datesWithTrucks, driverName, selectCurrentUser, useStore, userName } from '../lib/store';
+import { activeDrivers, activeSellers, activeUsers, datesWithTrucks, dayPriceOf, driverName, selectCurrentUser, sellerName, useStore, userName } from '../lib/store';
 import { getSyncStatus, onSyncStatus, SyncStatus, syncNow } from '../lib/sync';
 import { C, shadow } from '../lib/theme';
 import { toast } from '../lib/toast';
@@ -23,6 +23,8 @@ export default function Home() {
   const ds = useMemo(() => dayStats(trucks), [trucks]);
   const [create, setCreate] = useState(false);
   const [logoutAsk, setLogoutAsk] = useState(false);
+  const [editPrice, setEditPrice] = useState(false);
+  const dayPrice = dayPriceOf(store, date);
   const [sync, setSync] = useState<SyncStatus>(getSyncStatus());
   useEffect(() => onSyncStatus(setSync), []);
 
@@ -44,6 +46,7 @@ export default function Home() {
             <IconBtn name={sync.state === 'error' ? 'cloud-offline-outline' : sync.state === 'syncing' ? 'sync' : sync.state === 'ok' ? 'cloud-done-outline' : 'cloud-outline'}
               color={sync.state === 'error' ? 'red' : sync.state === 'ok' ? 'green' : 'gray'}
               onPress={async () => { const r = await syncNow(); if (r.ok) toast(`Đã đồng bộ: gửi ${r.pushed}, nhận ${r.received}`, 'ok'); else if ('off' in r) router.push('/settings/google'); else if ('error' in r) toast(r.error, 'err', 3500); }} />
+            <IconBtn name="wallet-outline" color="orange" onPress={() => router.push('/debts')} />
             <IconBtn name="settings-outline" color="blue" onPress={() => router.push('/settings')} />
           </>
         }
@@ -67,6 +70,12 @@ export default function Home() {
             ))}
           </ScrollView>
         ) : null}
+
+        <Pressable onPress={() => setEditPrice(true)} style={({ pressed }) => [st.priceBar, shadow, pressed && { opacity: 0.7 }]}>
+          <Ionicons name="pricetag-outline" size={18} color={dayPrice?.price != null ? C.green : C.muted} />
+          <Text style={{ flex: 1, color: C.muted, fontSize: 13 }}>Giá tham chiếu ngày {fmtDateShort(date)}{dayPrice?.note ? ` · ${dayPrice.note}` : ''}</Text>
+          <Text style={[st.priceVal, dayPrice?.price == null && { color: C.blue, fontSize: 14 }]}>{dayPrice?.price != null ? fmtMoney(dayPrice.price) + '/kg' : 'Nhập giá'}</Text>
+        </Pressable>
 
         <Stats items={[
           { icon: 'car-outline', color: C.blue, value: `${ds.done}/${ds.trucks}`, label: 'Xe xong' },
@@ -100,7 +109,7 @@ export default function Home() {
                   {t.payment.status === 'paid' ? <Pill text="Đã TT" color="green" small /> : t.payment.status === 'partial' ? <Pill text="TT 1 phần" color="orange" small /> : null}
                 </View>
                 <Text style={st.truckSub} numberOfLines={2}>
-                  {driverName(store, t.driverId) ? `Tài xế: ${driverName(store, t.driverId)} · ` : ''}
+                  {sellerName(store, t.sellerId) ? `${sellerName(store, t.sellerId)} · ` : ''}{driverName(store, t.driverId) ? `TX ${driverName(store, t.driverId)} · ` : ''}
                   Cân: {userName(store, t.weigherId) || '—'} · Tạo {fmtTime(t.createdAt)}{done ? ` · Xong ${fmtTime(t.doneAt)}` : ''}
                 </Text>
               </View>
@@ -121,6 +130,10 @@ export default function Home() {
       <Sheet visible={create} onClose={() => setCreate(false)} title={`Tạo Xe ${nextSeq} · ${fmtDateVN(date)}`} desc="Số xe tự tăng theo thứ tự trong ngày. Giờ tạo và người tạo được lưu lại.">
         {create ? <CreateTruckForm date={date} onClose={() => setCreate(false)} onCreated={(id) => { setCreate(false); router.push(`/truck/${id}`); }} /> : null}
       </Sheet>
+      <InputSheet visible={editPrice} onClose={() => setEditPrice(false)} title={`Giá tham chiếu ${fmtDateVN(date)}`} label="Giá (đ/kg)" unit="đ/kg" keyboard="number"
+        hint="Xe tạo mới trong ngày sẽ tự lấy giá này, vẫn sửa riêng từng xe được. Xe đã tạo không đổi."
+        initial={dayPrice?.price != null ? String(dayPrice.price) : ''}
+        onSave={(txt) => { const n = Number(String(txt).replace(/[^\d.]/g, '')); if (txt.trim() === '') { store.setDayPrice(date, null); setEditPrice(false); return; } if (isNaN(n) || n <= 0) return toast('Giá không hợp lệ', 'err'); store.setDayPrice(date, n); setEditPrice(false); haptic('success'); }} />
       <ConfirmSheet visible={logoutAsk} onClose={() => setLogoutAsk(false)} title="Đổi người dùng?" desc={`Đang đăng nhập: ${user?.name}. Dữ liệu vẫn được giữ trên máy.`} confirmText="Đăng xuất" onConfirm={() => { setLogoutAsk(false); store.logout(); }} />
     </View>
   );
@@ -130,8 +143,12 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
   const store = useStore();
   const user = useStore(selectCurrentUser);
   const drivers = activeDrivers(store);
+  const sellers = activeSellers(store);
   const users = activeUsers(store);
   const [driverId, setDriverId] = useState<string | null>(null);
+  const [sellerId, setSellerId] = useState<string | null>(null);
+  const [newSeller, setNewSeller] = useState('');
+  const [sellerQ, setSellerQ] = useState('');
   const [weigherId, setWeigherId] = useState<string | null>(user?.id || null);
   const [newDriver, setNewDriver] = useState('');
   const [note, setNote] = useState('');
@@ -140,7 +157,9 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
   function create() {
     let dId = driverId;
     if (!dId && newDriver.trim()) dId = store.addDriver({ name: newDriver }).id;
-    const t = store.createTruck({ date, driverId: dId, weigherId, note });
+    let sId = sellerId;
+    if (!sId && newSeller.trim()) sId = store.addSeller({ name: newSeller }).id;
+    const t = store.createTruck({ date, driverId: dId, sellerId: sId, weigherId, note });
     haptic('success');
     toast(`Đã tạo ${t.name} lúc ${fmtTime(t.createdAt)}`, 'ok');
     onCreated(t.id);
@@ -148,6 +167,15 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
 
   return (
     <>
+      <Field label="Người bán (mua của ai)">
+        {sellers.length > 8 ? <Input value={sellerQ} onChangeText={setSellerQ} placeholder="Tìm người bán" style={{ marginBottom: 8, paddingVertical: 8 }} /> : null}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {sellers.filter((x) => !sellerQ.trim() || x.name.toLowerCase().includes(sellerQ.trim().toLowerCase())).slice(0, 30).map((d) => (
+            <Pill key={d.id} text={d.name} color={sellerId === d.id ? 'blue' : 'gray'} onPress={() => setSellerId(sellerId === d.id ? null : d.id)} />
+          ))}
+        </View>
+        {!sellerId ? <Input value={newSeller} onChangeText={setNewSeller} placeholder="Hoặc nhập tên người bán mới" style={{ marginTop: 8 }} /> : null}
+      </Field>
       <Field label="Tài xế">
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {drivers.map((d) => (
@@ -189,6 +217,8 @@ const st = StyleSheet.create({
   truckSub: { color: C.muted, fontSize: 12.5, marginTop: 3, lineHeight: 17 },
   kg: { fontWeight: '800', fontSize: 17, color: C.text, fontVariant: ['tabular-nums'] },
   kgL: { fontSize: 11, color: C.muted },
+  priceBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10 },
+  priceVal: { fontWeight: '800', color: C.green, fontSize: 15, fontVariant: ['tabular-nums'] },
   fab: { position: 'absolute', alignSelf: 'center', backgroundColor: C.blue, paddingVertical: 14, paddingHorizontal: 22, borderRadius: 999, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: C.blue, shadowOpacity: 0.35, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 6 },
   fabText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 });

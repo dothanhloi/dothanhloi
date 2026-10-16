@@ -7,13 +7,13 @@ import * as Sharing from 'expo-sharing';
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Avatar, Card, ConfirmSheet, InputSheet, Pill, TopBar, haptic } from '../../components/ui';
+import { Avatar, Btn, Card, ConfirmSheet, Field, Input, InputSheet, Pill, Sheet, TopBar, haptic } from '../../components/ui';
 import { fmtDateTime, todayStr } from '../../lib/format';
-import { activeDrivers, activePresets, activeUsers, defaultPresetOf, selectCurrentUser, useStore } from '../../lib/store';
+import { activeDrivers, activePresets, activeSellers, activeUsers, defaultPresetOf, selectCurrentUser, useStore } from '../../lib/store';
 import { getSyncStatus, onSyncStatus, SyncStatus } from '../../lib/sync';
 import { C, shadow } from '../../lib/theme';
 import { toast } from '../../lib/toast';
-import type { SyncRecord } from '../../lib/types';
+import type { Company, SyncRecord } from '../../lib/types';
 
 function Row({ icon, color, title, sub, onPress, right }: { icon: React.ComponentProps<typeof Ionicons>['name']; color: string; title: string; sub?: string; onPress?: () => void; right?: React.ReactNode }) {
   return (
@@ -41,10 +41,11 @@ export default function Settings() {
   const presetCount = activePresets(store).length;
   const [askReset, setAskReset] = useState(false);
   const [askImport, setAskImport] = useState<SyncRecord[] | null>(null);
+  const [company, setCompany] = useState<Company | null>(null);
 
   async function exportData() {
     try {
-      const data = { exportedAt: new Date().toISOString(), users: store.users, drivers: store.drivers, presets: store.presets, trucks: store.trucks };
+      const data = { exportedAt: new Date().toISOString(), users: store.users, drivers: store.drivers, presets: store.presets, sellers: store.sellers, dayPrices: store.dayPrices, trucks: store.trucks };
       const file = new File(Paths.cache, `cancaphe-${todayStr()}.json`);
       await file.write(JSON.stringify(data, null, 2));
       if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'application/json', dialogTitle: 'Sao lưu dữ liệu' });
@@ -57,7 +58,7 @@ export default function Settings() {
       if (res.canceled || !res.assets?.[0]) return;
       const text = await new File(res.assets[0].uri).text();
       const data = JSON.parse(text);
-      const recs: SyncRecord[] = [...Object.values(data.users || {}), ...Object.values(data.drivers || {}), ...Object.values(data.presets || {}), ...Object.values(data.trucks || {})] as SyncRecord[];
+      const recs: SyncRecord[] = [...Object.values(data.users || {}), ...Object.values(data.drivers || {}), ...Object.values(data.presets || {}), ...Object.values(data.sellers || {}), ...Object.values(data.dayPrices || {}), ...Object.values(data.trucks || {})] as SyncRecord[];
       if (!recs.length) return toast('File không có dữ liệu', 'err');
       setAskImport(recs);
     } catch (e: any) { toast('Không đọc được file: ' + (e?.message || e), 'err', 3000); }
@@ -82,10 +83,16 @@ export default function Settings() {
 
         <Card title="Quản lý">
           <Row icon="people" color={C.blue} title="Nhân viên" sub={`${activeUsers(store).length} tài khoản · ai cân hàng sẽ hiện tên trên xe`} onPress={() => router.push('/settings/users')} />
+          <Row icon="person" color={C.green} title="Người bán" sub={`${activeSellers(store).length} người bán · xem công nợ từng người`} onPress={() => router.push('/settings/sellers')} />
+          <Row icon="wallet" color={C.red} title="Công nợ" sub="Tổng còn nợ theo người bán, ghi thanh toán" onPress={() => router.push('/debts')} />
           <Row icon="car" color={C.orange} title="Tài xế" sub={`${activeDrivers(store).length} tài xế`} onPress={() => router.push('/settings/drivers')} />
           <Row icon="logo-google" color={C.green} title="Liên kết Google Sheets"
             sub={store.settings.sheetUrl ? (sync.state === 'error' ? 'Lỗi: ' + sync.message : `Đã liên kết · đồng bộ lần cuối ${fmtDateTime(store.settings.lastSync)}`) : 'Chưa liên kết – dữ liệu chỉ lưu trên máy này'}
             onPress={() => router.push('/settings/google')} />
+        </Card>
+
+        <Card title="Thông tin trên phiếu cân">
+          <Row icon="business" color={C.blue} title={store.settings.company?.name || 'Tên cơ sở / công ty'} sub={[store.settings.company?.address, store.settings.company?.phone].filter(Boolean).join(' · ') || 'Bấm để nhập tên, địa chỉ, SĐT in trên phiếu cân'} onPress={() => setCompany({ name: '', phone: '', address: '', footer: '', ...(store.settings.company || {}) })} />
         </Card>
 
         <Card title="Mặc định khi tạo xe">
@@ -106,6 +113,20 @@ export default function Settings() {
         initial={edit ? String(store.settings[edit]) : ''}
         onSave={(txt) => { const n = Number(String(txt).replace(',', '.')); if (isNaN(n) || n < 1) return toast('Số không hợp lệ', 'err'); store.setSettings({ tablesPerTruck: Math.max(1, Math.round(n)) }); setEdit(null); haptic('success'); }} />
 
+      <Sheet visible={!!company} onClose={() => setCompany(null)} title="Thông tin trên phiếu cân">
+        {company ? (
+          <>
+            <Field label="Tên cơ sở / công ty"><Input value={company.name} onChangeText={(v) => setCompany({ ...company, name: v })} placeholder="VD: Thành Lợi Agrihub" /></Field>
+            <Field label="Địa chỉ"><Input value={company.address} onChangeText={(v) => setCompany({ ...company, address: v })} placeholder="Thôn, xã, huyện, tỉnh" /></Field>
+            <Field label="Số điện thoại"><Input value={company.phone} onChangeText={(v) => setCompany({ ...company, phone: v })} keyboardType="phone-pad" /></Field>
+            <Field label="Dòng cuối phiếu"><Input value={company.footer} onChangeText={(v) => setCompany({ ...company, footer: v })} placeholder="VD: Cảm ơn quý khách. STK: ..." /></Field>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Btn title="Huỷ" kind="ghost" onPress={() => setCompany(null)} style={{ flex: 1 }} />
+              <Btn title="Lưu" onPress={() => { store.setSettings({ company }); setCompany(null); haptic('success'); }} style={{ flex: 1 }} />
+            </View>
+          </>
+        ) : null}
+      </Sheet>
       <ConfirmSheet visible={askReset} onClose={() => setAskReset(false)} title="Xoá toàn bộ dữ liệu trên máy?" danger confirmText="Xoá hết"
         desc="Tất cả xe, nhân viên, tài xế trên máy này sẽ bị xoá và bạn sẽ phải đăng nhập lại. Hãy sao lưu trước."
         onConfirm={() => { setAskReset(false); store.resetAll(); }} />

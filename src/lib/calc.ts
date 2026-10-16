@@ -127,7 +127,7 @@ export function truckStats(t: Truck): TruckStats {
   const priceDeduct = impurity.price + moisture.price;
   const effectivePrice = price != null ? Math.max(0, price - priceDeduct) : null;
   const amount = effectivePrice != null ? net * effectivePrice : null;
-  const paid = Number(t.payment?.paidAmount || 0);
+  const paid = Array.isArray(t.payments) ? t.payments.reduce((a, x) => a + (Number(x.amount) || 0), 0) : Number(t.payment?.paidAmount || 0);
   const remaining = amount != null ? amount - paid : null;
   return { bags, gross, avg, tare, impurityPct, impurity, moisture, moistureVal, net, price, priceDeduct, effectivePrice, amount, paid, remaining, presetName: p.name };
 }

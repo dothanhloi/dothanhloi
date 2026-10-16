@@ -1,15 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { PRESET_TEMPLATES, tableStats } from './calc';
+import { PRESET_TEMPLATES, tableStats, truckStats } from './calc';
 import { COLS, ROWS, nowIso, uid } from './format';
-import type { Driver, HistoryKind, PresetSnapshot, QualityPreset, Settings, SyncRecord, Truck, User, WeighTable } from './types';
+import type { DayPrice, Driver, HistoryKind, Payment, PaymentMethod, PresetSnapshot, QualityPreset, Seller, Settings, SyncRecord, Truck, User, WeighTable } from './types';
 
 export interface State {
   users: Record<string, User>;
   drivers: Record<string, Driver>;
   trucks: Record<string, Truck>;
   presets: Record<string, QualityPreset>;
+  sellers: Record<string, Seller>;
+  dayPrices: Record<string, DayPrice>;
   session: { userId: string | null };
   settings: Settings;
   hydrated: boolean;
@@ -28,7 +30,7 @@ export interface Actions {
   updateDriver: (id: string, patch: Partial<Driver>) => void;
   removeDriver: (id: string) => void;
   // trucks
-  createTruck: (d: { date: string; driverId: string | null; weigherId: string | null; note?: string }) => Truck;
+  createTruck: (d: { date: string; driverId: string | null; sellerId?: string | null; weigherId: string | null; note?: string }) => Truck;
   removeTruck: (id: string) => void;
   setCell: (truckId: string, tableIdx: number, col: number, row: number, value: number | null) => boolean;
   setField: (truckId: string, what: string, path: string[], value: unknown, kind?: HistoryKind) => boolean;
@@ -39,6 +41,15 @@ export interface Actions {
   lockAllTables: (truckId: string, locked: boolean) => void;
   addTable: (truckId: string) => void;
   removeLastTable: (truckId: string) => boolean;
+  // sellers (người bán)
+  addSeller: (d: { name: string; phone?: string; address?: string; note?: string }) => Seller;
+  updateSeller: (id: string, patch: Partial<Seller>) => void;
+  removeSeller: (id: string) => void;
+  // payments (sổ thanh toán)
+  addPayment: (truckId: string, d: { amount: number; method: PaymentMethod; note?: string; at?: string }) => void;
+  removePayment: (truckId: string, paymentId: string) => void;
+  // day prices (giá tham chiếu theo ngày)
+  setDayPrice: (date: string, price: number | null, note?: string) => void;
   // presets (quy ước tạp độ)
   addPreset: (d: Omit<QualityPreset, 'id' | 'type' | 'createdAt' | 'updatedAt'>) => QualityPreset;
   updatePreset: (id: string, patch: Partial<QualityPreset>) => void;
@@ -84,6 +95,8 @@ export const useStore = create<Store>()(
       drivers: {},
       trucks: {},
       presets: {},
+      sellers: {},
+      dayPrices: {},
       session: { userId: null },
       settings: defaultSettings(),
       hydrated: false,
@@ -126,7 +139,7 @@ export const useStore = create<Store>()(
         set((s) => (s.drivers[id] ? { drivers: { ...s.drivers, [id]: bump(s.drivers[id], { deleted: true }) } } : {})),
 
       /* ---------- trucks ---------- */
-      createTruck: ({ date, driverId, weigherId, note }) => {
+      createTruck: ({ date, driverId, sellerId, weigherId, note }) => {
         const s = get();
         const user = s.users[s.session.userId || ''] || null;
         // kể cả xe đã xoá để số thứ tự không trùng
@@ -135,9 +148,12 @@ export const useStore = create<Store>()(
         const tables: WeighTable[] = [];
         for (let i = 1; i <= n; i++) tables.push(newTable(i));
         const dp = defaultPresetOf(s);
+        const dayPrice = s.dayPrices['dp-' + date];
+        const price0 = dayPrice && !dayPrice.deleted && dayPrice.price != null ? Number(dayPrice.price) : null;
         const t: Truck = {
           id: uid(), type: 'truck', date, seq, name: 'Xe ' + seq,
           driverId: driverId || null,
+          sellerId: sellerId || null,
           weigherId: weigherId || (user ? user.id : null),
           createdAt: nowIso(), createdBy: user ? user.id : null, createdByName: user ? user.name : '',
           updatedAt: nowIso(),
@@ -145,13 +161,14 @@ export const useStore = create<Store>()(
           loaded: false, loadedAt: null, loadedBy: null,
           tables,
           sample: { gram: null, impurityGram: null, impurityPct: null, moisture: null },
-          price: null,
+          price: price0,
           tarePerBag: Number(s.settings.tarePerBag) || 0,
           moistureStd: Number(s.settings.moistureStd) || 0,
           preset: dp ? snapshotOf(dp) : null,
           payment: { status: 'unpaid', paidAmount: 0, note: '' },
+          payments: [],
           note: note || '',
-          history: [],
+          history: price0 != null ? [{ id: uid(), at: nowIso(), by: user?.id || null, byName: user?.name || '?', what: 'Giá (theo giá ngày)', old: null, new: price0, kind: 'field' }] : [],
         };
         set({ trucks: { ...s.trucks, [t.id]: t } });
         return t;
@@ -265,6 +282,50 @@ export const useStore = create<Store>()(
         return true;
       },
 
+      /* ---------- sellers ---------- */
+      addSeller: ({ name, phone, address, note }) => {
+        const d: Seller = { id: uid(), type: 'seller', name: name.trim(), phone: (phone || '').trim(), address: (address || '').trim(), note: (note || '').trim(), createdAt: nowIso(), updatedAt: nowIso() };
+        set((s) => ({ sellers: { ...s.sellers, [d.id]: d } }));
+        return d;
+      },
+      updateSeller: (id, patch) =>
+        set((s) => (s.sellers[id] ? { sellers: { ...s.sellers, [id]: bump(s.sellers[id], patch) } } : {})),
+      removeSeller: (id) =>
+        set((s) => (s.sellers[id] ? { sellers: { ...s.sellers, [id]: bump(s.sellers[id], { deleted: true }) } } : {})),
+
+      /* ---------- payments ---------- */
+      addPayment: (truckId, { amount, method, note, at }) => {
+        const s = get();
+        const t = s.trucks[truckId];
+        if (!t) return;
+        const user = s.users[s.session.userId || ''];
+        const p: Payment = { id: uid(), at: at || nowIso(), amount: Math.round(Number(amount) || 0), method, by: user?.id || null, byName: user?.name || '?', note: (note || '').trim() };
+        const payments = [...paymentsOf(t), p];
+        const paidAmount = payments.reduce((a, x) => a + (Number(x.amount) || 0), 0);
+        get().patchTruck(truckId, { payments, payment: { ...t.payment, paidAmount, status: paymentStatusFor({ ...t, payments }, paidAmount) } },
+          { what: `Thanh toán (${method === 'cash' ? 'tiền mặt' : method === 'transfer' ? 'chuyển khoản' : 'khác'})`, old: t.payment.paidAmount, new: paidAmount, kind: 'field' });
+      },
+      removePayment: (truckId, paymentId) => {
+        const s = get();
+        const t = s.trucks[truckId];
+        if (!t) return;
+        const target = paymentsOf(t).find((x) => x.id === paymentId);
+        if (!target) return;
+        const payments = paymentsOf(t).filter((x) => x.id !== paymentId);
+        const paidAmount = payments.reduce((a, x) => a + (Number(x.amount) || 0), 0);
+        get().patchTruck(truckId, { payments, payment: { ...t.payment, paidAmount, status: paymentStatusFor({ ...t, payments }, paidAmount) } },
+          { what: 'Xoá lần thanh toán', old: target.amount, new: null, kind: 'field' });
+      },
+
+      /* ---------- day prices ---------- */
+      setDayPrice: (date, price, note) => {
+        const s = get();
+        const user = s.users[s.session.userId || ''];
+        const id = 'dp-' + date;
+        const d: DayPrice = { id, type: 'dayprice', date, price: price == null ? null : Number(price), note: (note || '').trim(), byName: user?.name || '', updatedAt: nowIso() };
+        set({ dayPrices: { ...s.dayPrices, [id]: d } });
+      },
+
       /* ---------- presets ---------- */
       addPreset: (d) => {
         const p: QualityPreset = { ...d, id: uid(), type: 'preset', createdAt: nowIso(), updatedAt: nowIso() };
@@ -314,10 +375,12 @@ export const useStore = create<Store>()(
         const drivers = { ...s.drivers };
         const trucks = { ...s.trucks };
         const presets = { ...s.presets };
+        const sellers = { ...s.sellers };
+        const dayPrices = { ...s.dayPrices };
         let changed = 0;
         for (const r of records || []) {
           if (!r || !r.id || !r.type) continue;
-          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : null;
+          const bucket: Record<string, any> | null = r.type === 'user' ? users : r.type === 'driver' ? drivers : r.type === 'truck' ? trucks : r.type === 'preset' ? presets : r.type === 'seller' ? sellers : r.type === 'dayprice' ? dayPrices : null;
           if (!bucket) continue;
           const local = bucket[r.id];
           if (!local || (r.updatedAt || '') > (local.updatedAt || '')) {
@@ -325,22 +388,36 @@ export const useStore = create<Store>()(
             changed++;
           }
         }
-        if (changed) set({ users, drivers, trucks, presets });
+        if (changed) set({ users, drivers, trucks, presets, sellers, dayPrices });
         return changed;
       },
-      resetAll: () => set({ users: {}, drivers: {}, trucks: {}, presets: {}, session: { userId: null }, settings: defaultSettings() }),
+      resetAll: () => set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, session: { userId: null }, settings: defaultSettings() }),
     }),
     {
       name: 'cancaphe.v1',
       storage: createJSONStorage(() => AsyncStorage),
-      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, session: s.session, settings: s.settings }),
-      merge: (persisted, current) => ({ ...current, ...(persisted as object), presets: (persisted as any)?.presets || {} }),
+      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, session: s.session, settings: s.settings }),
+      merge: (persisted, current) => ({ ...current, ...(persisted as object), presets: (persisted as any)?.presets || {}, sellers: (persisted as any)?.sellers || {}, dayPrices: (persisted as any)?.dayPrices || {} }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
       },
     },
   ),
 );
+
+/* ---------- payment helpers ---------- */
+export function paymentsOf(t: Truck): Payment[] {
+  if (Array.isArray(t.payments)) return t.payments;
+  // xe cũ: chuyển paidAmount thành một lần thanh toán ảo
+  const a = Number(t.payment?.paidAmount || 0);
+  return a > 0 ? [{ id: 'legacy', at: t.updatedAt, amount: a, method: 'other', by: null, byName: '', note: 'Nhập trước khi có sổ thanh toán' }] : [];
+}
+function paymentStatusFor(t: Truck, paid: number): Truck['payment']['status'] {
+  const s = truckStats({ ...t, payments: undefined, payment: { ...t.payment, paidAmount: paid } });
+  if (s.amount == null) return paid > 0 ? 'partial' : t.payment.status;
+  if (paid >= Math.round(s.amount) - 1) return 'paid';
+  return paid > 0 ? 'partial' : 'unpaid';
+}
 
 /* ---------- preset helpers ---------- */
 export function snapshotOf(p: QualityPreset): PresetSnapshot {
@@ -373,7 +450,14 @@ export const datesWithTrucks = (s: Store): { date: string; count: number }[] => 
   for (const t of Object.values(s.trucks)) if (!t.deleted) m[t.date] = (m[t.date] || 0) + 1;
   return Object.keys(m).sort().reverse().map((date) => ({ date, count: m[date] }));
 };
-export const allRecords = (s: Store): SyncRecord[] => [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.presets || {}), ...Object.values(s.trucks)];
+export const allRecords = (s: Store): SyncRecord[] => [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.presets || {}), ...Object.values(s.sellers || {}), ...Object.values(s.dayPrices || {}), ...Object.values(s.trucks)];
+export const activeSellers = (s: Store): Seller[] =>
+  Object.values(s.sellers || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+export const sellerName = (s: Store, id: string | null | undefined): string => (id && s.sellers?.[id]?.name) || '';
+export const dayPriceOf = (s: Pick<Store, 'dayPrices'>, date: string): DayPrice | null => {
+  const d = s.dayPrices?.['dp-' + date];
+  return d && !d.deleted ? d : null;
+};
 export const recordsSince = (s: Store, iso: string | null): SyncRecord[] => allRecords(s).filter((r) => !iso || (r.updatedAt || '') > iso);
 export const userName = (s: Store, id: string | null | undefined): string => (id && s.users[id]?.name) || '';
 export const driverName = (s: Store, id: string | null | undefined): string => (id && s.drivers[id]?.name) || '';
