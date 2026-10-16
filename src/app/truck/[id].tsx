@@ -67,6 +67,8 @@ export default function TruckScreen() {
 
   const s = useMemo(() => (t ? truckStats(t) : null), [t]);
   const truckId = id || '';
+  const photosAll = store.photos;
+  const photos = useMemo(() => photosOfTruck({ photos: photosAll } as any, truckId), [photosAll, truckId]);
 
   /* ---------- nhập ô cân (hooks phải đứng trước mọi return) ---------- */
   const commit = useCallback((e: EditingCell): boolean => {
@@ -115,6 +117,9 @@ export default function TruckScreen() {
 
   const editingValid = !editing || (!!t && editing.tableIdx < t.tables.length && (t.weighMode || 'bags') !== 'truck' && t.status !== 'done');
   useEffect(() => { if (!editingValid) setEditing(null); }, [editingValid, setEditing]);
+  // rời màn hình bằng vuốt lùi / nút back: vẫn lưu số đang nhập
+  useEffect(() => () => { const cur = editingRef.current; if (cur) { commit(cur); editingRef.current = null; } }, [commit]);
+  const photoUris = useMemo(() => Object.fromEntries(photos.map((p) => [p.id, photoUri(p)])), [photos]);
 
   if (!t || t.deleted || !s) {
     return (
@@ -130,7 +135,6 @@ export default function TruckScreen() {
   const presets = activePresets(store);
   const money = canSeeMoney(store);
   const isTruckMode = (t.weighMode || 'bags') === 'truck';
-  const photos = photosOfTruck(store, t.id);
   const addPhoto = async (kind: typeof PHOTO_KINDS[number]['v'], fromLibrary: boolean) => {
     setPhotoKind(null);
     try { const p = await takePhoto(t.id, kind, fromLibrary); if (p) { haptic('success'); toast('Đã thêm ảnh', 'ok'); } }
@@ -209,7 +213,7 @@ export default function TruckScreen() {
         onTitlePress={readOnly ? undefined : () => setField('name')}
         right={
           <>
-            <IconBtn name={allLocked ? 'lock-closed' : 'lock-open-outline'} color={allLocked ? 'gray' : 'blue'} onPress={() => { if (readOnly) return toast('Xe đã xong'); haptic(); setEditing(null); store.lockAllTables(t.id, !allLocked); }} />
+            <IconBtn name={allLocked ? 'lock-closed' : 'lock-open-outline'} color={allLocked ? 'gray' : 'blue'} onPress={() => { if (readOnly) return toast('Xe đã xong'); haptic(); const cur = editingRef.current; if (cur) commit(cur); setEditing(null); store.lockAllTables(t.id, !allLocked); }} />
             {money ? <IconBtn name="share-outline" color="green" onPress={doShare} /> : null}
             <IconBtn name="time-outline" color="blue" onPress={() => router.push(`/history/${t.id}`)} />
             <IconBtn name="trash-outline" color="red" onPress={() => setAskDelete(true)} />
@@ -281,13 +285,13 @@ export default function TruckScreen() {
         ) : (
           <>
             {t.tables.map((tb, i) => (
-              <WeighTable key={tb.id} table={tb} tableIdx={i} editing={editing} readOnly={readOnly}
+              <WeighTable key={tb.id} table={tb} tableIdx={i} editing={editing && editing.tableIdx === i ? editing : null} readOnly={readOnly}
                 onCellPress={onCellPress} onCellLongPress={onCellLongPress} onToggleLock={onToggleLock} />
             ))}
             {!readOnly ? (
               <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
                 <Btn title="Thêm bảng" kind="secondary" icon="add" small onPress={() => { haptic(); store.addTable(t.id); }} style={{ flex: 1 }} />
-                <Btn title="Bớt bảng" kind="ghost" icon="remove" small onPress={() => { const cur = editingRef.current; if (cur && cur.tableIdx === t.tables.length - 1) setEditing(null); if (!store.removeLastTable(t.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }} style={{ flex: 1 }} />
+                <Btn title="Bớt bảng" kind="ghost" icon="remove" small onPress={() => { const cur = editingRef.current; if (cur) { commit(cur); setEditing(null); } if (!store.removeLastTable(t.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }} style={{ flex: 1 }} />
               </View>
             ) : null}
           </>
@@ -298,7 +302,7 @@ export default function TruckScreen() {
           {photos.length === 0 ? <Text style={{ color: C.muted, fontSize: 13 }}>Chụp ảnh mẫu hàng, phiếu cân giấy, xe hàng. Ảnh tự tải lên Google Drive khi đã liên kết Google Sheets.</Text> : (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
               {photos.map((p) => {
-                const uri = photoUri(p) || (p.driveUrl ? driveThumb(p.driveUrl) : null);
+                const uri = photoUris[p.id] || (p.driveUrl ? driveThumb(p.driveUrl) : null);
                 return (
                   <Pressable key={p.id} onPress={() => setViewPhoto(p.id)} onLongPress={() => { if (readOnly) return; haptic('medium'); setDelPhoto(p.id); }} delayLongPress={600} style={st.thumbWrap}>
                     {uri ? <Image source={{ uri }} style={st.thumb} /> : <View style={[st.thumb, { alignItems: 'center', justifyContent: 'center' }]}><Ionicons name="cloud-offline-outline" size={22} color={C.muted} /></View>}
@@ -442,7 +446,7 @@ export default function TruckScreen() {
           <>
             {uri ? <Image source={{ uri }} style={{ width: '100%', aspectRatio: 3 / 4, borderRadius: 12, backgroundColor: C.gray }} resizeMode="contain" /> : <Text style={{ color: C.muted }}>Ảnh chưa có trên máy này và chưa được tải lên Google Drive.</Text>}
             <Text style={{ color: C.muted, fontSize: 12, marginTop: 8 }}>{p.byName ? `${p.byName} · ` : ''}{fmtDateTime(p.createdAt)}{p.driveUrl ? ' · đã lưu Google Drive' : ' · chưa tải lên'}</Text>
-            {p.driveUrl ? <Btn title="Mở trên Google Drive" kind="ghost" small icon="open-outline" onPress={() => Linking.openURL(p.driveUrl!)} style={{ marginTop: 8, alignSelf: 'flex-start' }} /> : null}
+            {p.driveUrl ? <Btn title="Mở trên Google Drive" kind="ghost" small icon="open-outline" onPress={() => Linking.openURL(p.driveUrl!).catch(() => toast('Không mở được liên kết', 'err'))} style={{ marginTop: 8, alignSelf: 'flex-start' }} /> : null}
           </>); })() : null}
       </Sheet>
       <ConfirmSheet visible={!!delPhoto} onClose={() => setDelPhoto(null)} title="Xoá ảnh này?" danger confirmText="Xoá" onConfirm={() => { if (delPhoto) { const p = store.photos[delPhoto]; if (p) deletePhotoFile(p); store.removePhoto(delPhoto); } setDelPhoto(null); }} />

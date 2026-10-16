@@ -9,6 +9,7 @@ import { truckStats } from '../../lib/calc';
 import { fmtDateVN, fmtKg, fmtMoney, fmtTime } from '../../lib/format';
 import { canSeeMoney, useStore } from '../../lib/store';
 import { C } from '../../lib/theme';
+import { toast } from '../../lib/toast';
 
 export default function SellerDebt() {
   const { sellerId } = useLocalSearchParams<{ sellerId: string }>();
@@ -44,7 +45,7 @@ export default function SellerDebt() {
           { icon: 'cash-outline', color: C.blue, value: fmtMoney(total.amount), label: 'Thành tiền' },
           { icon: 'alert-circle-outline', color: C.red, value: fmtMoney(total.remaining), label: 'Còn nợ' },
         ]} />
-        {seller?.phone ? <Btn title={`Gọi ${seller.phone}`} kind="ghost" small icon="call-outline" onPress={() => Linking.openURL('tel:' + seller.phone)} style={{ alignSelf: 'flex-start', marginBottom: 10 }} /> : null}
+        {seller?.phone ? <Btn title={`Gọi ${seller.phone}`} kind="ghost" small icon="call-outline" onPress={() => Linking.openURL('tel:' + seller.phone).catch(() => toast('Máy này không gọi điện được', 'err'))} style={{ alignSelf: 'flex-start', marginBottom: 10 }} /> : null}
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
           <Pill text="Còn nợ" color={onlyOpen ? 'blue' : 'gray'} small onPress={() => setOnlyOpen(true)} />
           <Pill text="Tất cả xe" color={!onlyOpen ? 'blue' : 'gray'} small onPress={() => setOnlyOpen(false)} />

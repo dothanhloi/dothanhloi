@@ -29,7 +29,8 @@ export default function Home() {
   const money = canSeeMoney(store);
   const isAdmin = user?.role === 'admin';
   const [showRem, setShowRem] = useState(false);
-  const rems = useMemo(() => reminders(store), [store]);
+  const remTrucks = store.trucks; const remSellers = store.sellers; const remConfigs = store.configs;
+  const rems = useMemo(() => reminders({ trucks: remTrucks, sellers: remSellers, configs: remConfigs, settings: store.settings } as any), [remTrucks, remSellers, remConfigs, store.settings]);
   const [sync, setSync] = useState<SyncStatus>(getSyncStatus());
   useEffect(() => onSyncStatus(setSync), []);
 

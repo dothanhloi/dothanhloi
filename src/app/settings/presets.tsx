@@ -28,8 +28,10 @@ export default function Presets() {
   function openNew(tplKey?: string) {
     const tpl = PRESET_TEMPLATES.find((x) => x.key === tplKey);
     const base = tpl ? tpl.make() : PRESET_TEMPLATES[0].make();
-    setDraft({ ...base, name: tpl ? tpl.name : '', note: tpl ? tpl.desc : '', isDefault: presets.length === 0 });
+    const draftNext = { ...base, name: tpl ? tpl.name : '', note: tpl ? tpl.desc : '', isDefault: presets.length === 0 };
     setPickTpl(false);
+    // iOS: không mở Modal thứ hai khi Modal thứ nhất đang đóng
+    setTimeout(() => setDraft(draftNext), 400);
   }
   function openEdit(p: QualityPreset) {
     setDraft({ id: p.id, name: p.name, note: p.note || '', isDefault: p.isDefault, tareMode: p.tareMode, tareValue: p.tareValue, impurityInput: p.impurityInput,

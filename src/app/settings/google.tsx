@@ -74,7 +74,7 @@ export default function GoogleSettings() {
               <Text style={{ flex: 1, color: C.text, lineHeight: 20, fontSize: 14 }}>{s}</Text>
             </View>
           ))}
-          <Btn title="Mở hướng dẫn chi tiết" kind="ghost" icon="open-outline" small onPress={() => Linking.openURL(GUIDE_URL)} />
+          <Btn title="Mở hướng dẫn chi tiết" kind="ghost" icon="open-outline" small onPress={() => Linking.openURL(GUIDE_URL).catch(() => toast('Không mở được trình duyệt', 'err'))} />
           <View style={{ flexDirection: 'row', gap: 6, marginTop: 10, alignItems: 'flex-start' }}>
             <Ionicons name="information-circle-outline" size={16} color={C.muted} />
             <Text style={{ color: C.muted, fontSize: 12.5, flex: 1, lineHeight: 17 }}>

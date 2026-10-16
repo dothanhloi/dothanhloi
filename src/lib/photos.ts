@@ -36,13 +36,10 @@ export function photoUri(p: Photo): string | null {
 }
 
 export async function takePhoto(truckId: string, kind: Photo['kind'], fromLibrary = false): Promise<Photo | null> {
-  if (fromLibrary) {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) throw new Error('Chưa cấp quyền thư viện ảnh');
-  } else {
+  if (!fromLibrary) {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) throw new Error('Chưa cấp quyền máy ảnh');
-  }
+  } // thư viện ảnh: bộ chọn hệ thống không cần quyền
   const res = fromLibrary
     ? await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9, allowsMultipleSelection: false })
     : await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.9 });

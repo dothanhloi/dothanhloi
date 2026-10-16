@@ -1,4 +1,4 @@
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
@@ -11,16 +11,6 @@ import { C } from '../lib/theme';
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const hydrated = useStore((s) => s.hydrated);
-  const user = useStore(selectCurrentUser);
-  const segments = useSegments();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!hydrated) return;
-    const onLogin = segments[0] === 'login';
-    if (!user && !onLogin) router.replace('/login');
-    else if (user && onLogin) router.replace('/');
-  }, [hydrated, user, segments, router]);
 
   // Tự đồng bộ khi mở app và khi dữ liệu đổi
   useEffect(() => {
@@ -46,12 +36,25 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+const APP_ROUTES = ['index', 'truck/[id]', 'history/[id]', 'settings/index', 'settings/users', 'settings/drivers', 'settings/sellers', 'settings/google',
+  'settings/presets', 'settings/products', 'settings/warehouses', 'debts/index', 'debts/[sellerId]', 'reports/index', 'inventory/index', 'search/index'];
+
 export default function RootLayout() {
+  const user = useStore(selectCurrentUser);
+  const loggedIn = !!user;
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
       <AuthGate>
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: C.bg }, animation: 'slide_from_right' }} />
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: C.bg }, animation: 'slide_from_right' }}>
+          {/* chưa đăng nhập → chỉ vào được login; đã đăng nhập → không vào lại login */}
+          <Stack.Protected guard={loggedIn}>
+            {APP_ROUTES.map((name) => <Stack.Screen key={name} name={name} />)}
+          </Stack.Protected>
+          <Stack.Protected guard={!loggedIn}>
+            <Stack.Screen name="login" />
+          </Stack.Protected>
+        </Stack>
       </AuthGate>
       <ToastHost />
     </SafeAreaProvider>

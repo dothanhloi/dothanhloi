@@ -174,9 +174,11 @@ export function Sheet({ visible, onClose, title, desc, children }: { visible: bo
           <View style={st.handle} />
           {title ? <Text style={st.sheetTitle}>{title}</Text> : null}
           {desc ? <Text style={st.sheetDesc}>{desc}</Text> : null}
-          <ScrollView keyboardShouldPersistTaps="handled" bounces={false} style={{ maxHeight: 520 }}>{children}</ScrollView>
+          <ScrollView keyboardShouldPersistTaps="handled" bounces={false} style={{ flexShrink: 1 }}>{children}</ScrollView>
         </View>
       </KeyboardAvoidingView>
+      {/* Modal nằm trên cây gốc nên toast ngoài Modal không hiện: render thêm một ToastHost trong sheet */}
+      <ToastHost />
     </Modal>
   );
 }
@@ -312,7 +314,7 @@ const st = StyleSheet.create({
   statUnit: { fontSize: 12, color: C.muted, fontWeight: '600' },
   statL: { fontSize: 12, color: C.muted, marginTop: 3 },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
-  sheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 12 },
+  sheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 12, flexShrink: 1, maxHeight: '92%' },
   handle: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#DDD', alignSelf: 'center', marginBottom: 12 },
   sheetTitle: { fontSize: 18, fontWeight: '700', marginBottom: 4, color: C.text },
   sheetDesc: { color: C.muted, fontSize: 13.5, marginBottom: 12 },

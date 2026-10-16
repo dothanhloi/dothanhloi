@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Empty, Input, Pill, TopBar } from '../../components/ui';
 import { truckStats } from '../../lib/calc';
@@ -47,11 +47,13 @@ export default function Search() {
           ))}
         </ScrollView>
       </View>
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: insets.bottom + 30 }} keyboardShouldPersistTaps="handled">
-        {results.length === 0 ? <Empty icon="search-outline" text="Không tìm thấy xe" /> : results.map((t) => {
+      <FlatList data={results} keyExtractor={(t) => t.id} keyboardShouldPersistTaps="handled" initialNumToRender={15} windowSize={7}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: insets.bottom + 30 }}
+        ListEmptyComponent={<Empty icon="search-outline" text="Không tìm thấy xe" />}
+        renderItem={({ item: t }) => {
           const s = truckStats(t);
           return (
-            <Pressable key={t.id} onPress={() => router.push(`/truck/${t.id}`)} style={({ pressed }) => [st.row, shadow, pressed && { opacity: 0.7 }]}>
+            <Pressable onPress={() => router.push(`/truck/${t.id}`)} style={({ pressed }) => [st.row, shadow, pressed && { opacity: 0.7 }]}>
               <View style={{ flex: 1 }}>
                 <Text style={st.name}>{fmtDateVN(t.date)} · {t.name}{sellerName(store, t.sellerId) ? ` · ${sellerName(store, t.sellerId)}` : ''}</Text>
                 <Text style={st.sub}>{[driverName(store, t.driverId) && `TX ${driverName(store, t.driverId)}`, userName(store, t.weigherId) && `cân ${userName(store, t.weigherId)}`, productName(store, t.productId), t.status === 'done' ? 'đã xong' : 'đang cân', t.loaded ? 'đã bốc' : 'chưa bốc'].filter(Boolean).join(' · ')}</Text>
@@ -62,8 +64,7 @@ export default function Search() {
               </View>
             </Pressable>
           );
-        })}
-      </ScrollView>
+        }} />
     </View>
   );
 }

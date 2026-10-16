@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useShallow } from 'zustand/react/shallow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Btn, Card, Field, Input, haptic } from '../components/ui';
 import { activeUsers, useStore } from '../lib/store';
@@ -11,13 +11,13 @@ import { toast } from '../lib/toast';
 
 export default function Login() {
   const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const users = useStore(activeUsers);
+  const users = useStore(useShallow(activeUsers));
   const login = useStore((s) => s.login);
   const addUser = useStore((s) => s.addUser);
   const [sel, setSel] = useState<string | null>(null);
   const [pin, setPin] = useState('');
   const [shake, setShake] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   // Lần đầu: tạo tài khoản quản lý
   const [name, setName] = useState('');
@@ -47,23 +47,27 @@ export default function Login() {
     setPin(next);
     if (next.length === 4 && sel) {
       setTimeout(async () => {
-        if (await login(sel, next)) { haptic('success'); router.replace('/'); }
+        if (await login(sel, next)) haptic('success'); // Stack.Protected tự chuyển sang trang chính
         else { haptic('error'); setShake(true); setPin(''); setTimeout(() => setShake(false), 400); toast('Sai mã PIN', 'err'); }
       }, 80);
     }
   }
 
   async function createFirst() {
+    if (creating) return;
     if (name.trim().length < 2) return toast('Nhập tên', 'err');
     if (!/^\d{4}$/.test(pin1)) return toast('PIN phải gồm 4 chữ số', 'err');
     if (pin1 !== pin2) return toast('PIN nhập lại không khớp', 'err');
-    const u = await addUser({ name, pin: pin1, role: 'admin' });
-    await login(u.id, pin1);
-    haptic('success');
-    router.replace('/');
+    setCreating(true);
+    try {
+      const u = await addUser({ name, pin: pin1, role: 'admin' });
+      await login(u.id, pin1);
+      haptic('success');
+    } finally { setCreating(false); }
   }
 
   return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: C.bg }}>
     <ScrollView contentContainerStyle={[st.wrap, { paddingTop: insets.top + 36, paddingBottom: insets.bottom + 24 }]} keyboardShouldPersistTaps="handled">
       <View style={st.logo}><Ionicons name="scale" size={44} color="#fff" /></View>
       <Text style={st.h1}>Cân Cà Phê</Text>
@@ -84,7 +88,7 @@ export default function Login() {
             <Field label="Tên của bạn"><Input value={name} onChangeText={setName} placeholder="VD: Thành Lợi" autoFocus /></Field>
             <Field label="Mã PIN (4 số)"><Input value={pin1} onChangeText={setPin1} keyboardType="number-pad" maxLength={4} secureTextEntry placeholder="••••" /></Field>
             <Field label="Nhập lại PIN"><Input value={pin2} onChangeText={setPin2} keyboardType="number-pad" maxLength={4} secureTextEntry placeholder="••••" /></Field>
-            <Btn title="Tạo tài khoản & bắt đầu" onPress={createFirst} />
+            <Btn title={creating ? 'Đang tạo...' : 'Tạo tài khoản & bắt đầu'} onPress={createFirst} disabled={creating} />
           </Card>
         </>
       ) : (
@@ -120,6 +124,7 @@ export default function Login() {
         </>
       )}
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 

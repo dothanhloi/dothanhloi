@@ -98,7 +98,7 @@ Trong App Store Connect → **App Store** tab:
 Vì app dùng đăng nhập nội bộ, trong mục *App Review Information* hãy ghi chú cho Apple: “Lần đầu mở app sẽ tự tạo tài khoản quản lý, không cần tài khoản sẵn có”.
 
 ### 3.6 Cập nhật về sau
-- Sửa code JS → `npx eas-cli@latest update --branch production --message "..."` phát bản cập nhật tức thì (OTA) không cần nộp lại.
+- Sửa code JS → `npx eas-cli@latest update --branch production --message "..."` phát bản cập nhật tức thì (OTA) không cần nộp lại. Lần đầu chạy `npx eas-cli@latest update:configure` (ghi `updates.url` vào app.json) rồi build lại một lần.
 - Thêm thư viện native hoặc đổi `app.json` → build lại (`eas build`) và nộp lại (`eas submit`). `autoIncrement` trong `eas.json` tự tăng số build.
 
 ### 3.7 Android (tuỳ chọn)
