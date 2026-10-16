@@ -169,13 +169,14 @@ export default function TruckScreen() {
   const guarded = (k: FieldKey) => {
     const v = fieldValue(k);
     const empty = v == null || v === '';
+    const locked = readOnly && k !== 'paymentNote'; // thanh toán vẫn ghi được sau khi xong xe
     return {
       empty,
       onPress: () => {
-        if (readOnly) return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.');
+        if (locked) return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.');
         if (empty) setField(k); else toast('Nhấn giữ để sửa');
       },
-      onLongPress: () => { if (readOnly) return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.'); haptic('medium'); setField(k); },
+      onLongPress: () => { if (locked) return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.'); haptic('medium'); setField(k); },
     };
   };
   const saveField = (text: string) => {

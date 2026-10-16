@@ -1,5 +1,5 @@
 import { nowIso } from './format';
-import { allRecords, recordsSince, useStore } from './store';
+import { allRecords, pendingRecords, useStore } from './store';
 import { photoBase64 } from './photos';
 import type { SyncRecord } from './types';
 
@@ -46,9 +46,15 @@ export async function syncNow(opts: { full?: boolean } = {}) {
   emit({ state: 'syncing', message: 'Đang đồng bộ...' });
   try {
     const st = useStore.getState();
-    const records = opts.full ? allRecords(st) : recordsSince(st, st.settings.lastPush);
+    const records = opts.full ? allRecords(st) : pendingRecords(st);
     const pushedAt = nowIso();
+    // ghi nhớ bản đã gửi: chỉ bỏ khỏi hàng chờ nếu bản ghi không đổi trong lúc gửi
+    const sentRefs = new Map<string, unknown>();
+    for (const r of records) sentRefs.set(r.id, findRecord(st, r.id));
     const data = await request(u, { action: 'sync', records, since: opts.full ? null : st.settings.lastSync });
+    const after = useStore.getState();
+    const done = [...sentRefs.keys()].filter((id) => findRecord(after, id) === sentRefs.get(id));
+    after.clearPending(done);
     const changed = useStore.getState().mergeRecords(data.records || []);
     // lastSync dùng giờ máy chủ (receivedAt) để không bỏ sót bản ghi máy khác gửi muộn
     useStore.getState().setSettings({ lastPush: pushedAt, lastSync: data.serverNow || nowIso() });
@@ -63,6 +69,14 @@ export async function syncNow(opts: { full?: boolean } = {}) {
   } finally {
     busy = false;
   }
+}
+
+function findRecord(s: ReturnType<typeof useStore.getState>, id: string): unknown {
+  for (const k of ['users', 'drivers', 'trucks', 'presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos'] as const) {
+    const r = (s[k] as Record<string, unknown>)[id];
+    if (r) return r;
+  }
+  return undefined;
 }
 
 /** Tải các ảnh chưa có link Drive lên Google Drive (qua Apps Script), tối đa 5 ảnh mỗi lần */
@@ -81,8 +95,7 @@ async function uploadPendingPhotos(u: string): Promise<number> {
       if (data.ok && data.url) { useStore.getState().updatePhoto(p.id, { driveUrl: data.url }); n++; }
     } catch (e) { console.warn('upload photo', e); }
   }
-  if (n) { useStore.getState().setSettings({ lastPush: null }); } // đẩy lại bản ghi ảnh đã có link ở lần sau
-  return n;
+  return n; // updatePhoto đã tự đánh dấu chờ đẩy
 }
 
 /** Gọi sau mỗi lần thay đổi dữ liệu: tự đồng bộ sau 3 giây nếu bật */

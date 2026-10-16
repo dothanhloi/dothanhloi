@@ -76,6 +76,7 @@ ${t.note ? kv('Ghi chú', esc(t.note)) : ''}
 </table>
 ${tables}
 <table class="sum">
+${(t.weighMode || 'bags') === 'truck' ? kv('Cân xe vào (có hàng)', fmtKg(t.truckWeigh?.grossIn ?? null) + ' kg') + kv('Cân xe ra (rỗng)', fmtKg(t.truckWeigh?.tareOut ?? null) + ' kg') : ''}
 ${kv('Tổng bao', String(s.bags))}
 ${kv('Tổng thô', fmtKg(s.gross) + ' kg')}
 ${s.tare > 0 ? kv('Trừ bì', '− ' + fmtKg(s.tare) + ' kg') : ''}

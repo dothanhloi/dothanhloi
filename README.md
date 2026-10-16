@@ -128,6 +128,8 @@ Các trang tự tạo trong Sheets: **Xe**, **Chi tiết cân**, **Thanh toán**
 
 Khi sửa `Code.gs`, vào **Triển khai → Quản lý triển khai → ✏️ → Phiên bản: Mới → Triển khai** thì link cũ mới chạy mã mới.
 
+Bản mới có tải ảnh lên Google Drive nên khi dán lại mã, Google sẽ hỏi cấp thêm quyền Drive: bấm **Xem lại quyền** → cho phép, rồi mới tạo phiên bản triển khai mới.
+
 Tuỳ chọn: trong trình soạn thảo Apps Script chọn hàm `setupTrigger` và bấm Chạy một lần. Các trang dễ đọc (Xe, Công nợ, Tồn kho...) sẽ được dựng lại mỗi 10 phút khi có thay đổi, ngoài việc tự dựng lại tối đa 2 phút một lần mỗi khi có máy đồng bộ.
 
 Cách đồng bộ: mỗi máy gửi các bản ghi thay đổi, máy chủ ghi theo giờ nhận và trả về những gì máy đó chưa có. Xe được **gộp theo trường**: bản mới hơn thắng số cân và thông tin, còn sổ thanh toán và lịch sử sửa được hợp nhất từ cả hai máy nên không mất lần trả tiền ghi ở máy khác. Hai máy cùng tạo "Xe 3" khi mất mạng: xe tạo sau được đánh lại số và ghi lịch sử.

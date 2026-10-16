@@ -150,7 +150,7 @@ export default function Settings() {
         onConfirm={() => { setAskReset(false); store.resetAll(); }} />
       <ConfirmSheet visible={!!askImport} onClose={() => setAskImport(null)} title="Khôi phục dữ liệu?" confirmText="Gộp vào máy"
         desc={`File có ${askImport?.length || 0} bản ghi. Bản ghi mới hơn sẽ ghi đè bản cũ, dữ liệu hiện có không bị mất.`}
-        onConfirm={() => { const n = store.mergeRecords(askImport || []); setAskImport(null); toast(`Đã cập nhật ${n} bản ghi`, 'ok'); }} />
+        onConfirm={() => { const n = store.mergeRecords(askImport || [], { markPending: true }); setAskImport(null); toast(`Đã cập nhật ${n} bản ghi`, 'ok'); }} />
     </View>
   );
 }

@@ -22,6 +22,8 @@ export interface State {
   session: { userId: string | null };
   settings: Settings;
   hydrated: boolean;
+  /** id bản ghi đã đổi trên máy này, chờ đẩy lên máy chủ (không phụ thuộc đồng hồ) */
+  pending: Record<string, true>;
 }
 
 export interface Actions {
@@ -88,7 +90,9 @@ export interface Actions {
   // settings
   setSettings: (patch: Partial<Settings>) => void;
   // sync
-  mergeRecords: (records: SyncRecord[]) => number;
+  mergeRecords: (records: SyncRecord[], opts?: { markPending?: boolean }) => number;
+  markPending: (ids: string[]) => void;
+  clearPending: (ids: string[]) => void;
   resetAll: () => void;
 }
 
@@ -116,6 +120,10 @@ function bump<T extends { updatedAt: string }>(r: T, patch: Partial<T> = {}): T 
   return { ...r, ...patch, updatedAt: nowIso() };
 }
 
+/** true trong lúc mergeRecords áp dữ liệu máy chủ → không đánh dấu chờ đẩy */
+let applyingRemote = false;
+export const BUCKETS = ['users', 'drivers', 'trucks', 'presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos'] as const;
+
 export const useStore = create<Store>()(
   persist(
     (set, get) => ({
@@ -133,6 +141,7 @@ export const useStore = create<Store>()(
       session: { userId: null },
       settings: defaultSettings(),
       hydrated: false,
+      pending: {},
 
       setHydrated: (v) => set({ hydrated: v }),
 
@@ -417,7 +426,7 @@ export const useStore = create<Store>()(
       removePayment: (truckId, paymentId) => {
         const s = get();
         const t = s.trucks[truckId];
-        if (!t) return;
+        if (!t || paymentId === 'legacy') return;
         const target = paymentsOf(t).find((x) => x.id === paymentId);
         if (!target) return;
         const payments = paymentsOf(t).filter((x) => x.id !== paymentId);
@@ -478,8 +487,11 @@ export const useStore = create<Store>()(
       setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
 
       /* ---------- sync ---------- */
-      mergeRecords: (records) => {
+      markPending: (ids) => { if (ids.length) set((s) => { const pending = { ...s.pending }; for (const id of ids) pending[id] = true; return { pending }; }); },
+      clearPending: (ids) => { if (ids.length) set((s) => { const pending = { ...s.pending }; for (const id of ids) delete pending[id]; return { pending }; }); },
+      mergeRecords: (records, opts) => {
         const s = get();
+        const toPush: string[] = opts?.markPending ? records.map((r) => r.id) : [];
         const users = { ...s.users };
         const drivers = { ...s.drivers };
         const trucks = { ...s.trucks };
@@ -499,7 +511,7 @@ export const useStore = create<Store>()(
           const local = bucket[r.id];
           if (r.type === 'truck' && local) {
             const merged = mergeTruck(local as Truck, r as Truck);
-            if (merged !== local) { bucket[r.id] = merged; changed++; }
+            if (merged !== local) { bucket[r.id] = merged; changed++; if (merged !== r) toPush.push(r.id); } // bản gộp có phần máy chủ chưa có
             continue;
           }
           if (!local || (r.updatedAt || '') > (local.updatedAt || '')) {
@@ -520,11 +532,18 @@ export const useStore = create<Store>()(
               const seq = maxSeq + 1;
               const isDefaultName = t.name === 'Xe ' + t.seq;
               trucks[t.id] = bump(t, { seq, name: isDefaultName ? 'Xe ' + seq : t.name, history: [...t.history, { id: uid(), at: nowIso(), by: null, byName: 'Hệ thống', what: 'Đánh lại số xe (trùng khi đồng bộ)', old: t.seq, new: seq, kind: 'status' as HistoryKind }] });
-              used.add(seq); maxSeq = Math.max(maxSeq, seq); changed++;
+              used.add(seq); maxSeq = Math.max(maxSeq, seq); changed++; toPush.push(t.id);
             } else { used.add(t.seq); maxSeq = Math.max(maxSeq, t.seq); }
           }
         }
-        if (changed) set({ users, drivers, trucks, presets, sellers, dayPrices, warehouses, products, sales, hedges, photos });
+        if (changed) {
+          applyingRemote = true;
+          try {
+            const pending = { ...s.pending };
+            for (const id of toPush) pending[id] = true;
+            set({ users, drivers, trucks, presets, sellers, dayPrices, warehouses, products, sales, hedges, photos, pending });
+          } finally { applyingRemote = false; }
+        }
         return changed;
       },
       resetAll: () => {
@@ -535,13 +554,13 @@ export const useStore = create<Store>()(
     {
       name: 'cancaphe.v1',
       storage: createJSONStorage(() => appStorage),
-      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, warehouses: s.warehouses, products: s.products, sales: s.sales, hedges: s.hedges, photos: s.photos, session: s.session, settings: s.settings }),
+      partialize: (s) => ({ users: s.users, drivers: s.drivers, trucks: s.trucks, presets: s.presets, sellers: s.sellers, dayPrices: s.dayPrices, warehouses: s.warehouses, products: s.products, sales: s.sales, hedges: s.hedges, photos: s.photos, session: s.session, settings: s.settings, pending: s.pending }),
       merge: (persisted, current) => {
         const p = (persisted || {}) as any;
-        const keys = ['presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos'] as const;
+        const keys = ['presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos', 'pending'] as const;
         const filled: Record<string, unknown> = {};
         for (const k of keys) filled[k] = p[k] || {};
-        return { ...current, ...p, ...filled };
+        return { ...current, ...p, ...filled, settings: { ...current.settings, ...(p.settings || {}) }, session: { ...current.session, ...(p.session || {}) } };
       },
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
@@ -549,6 +568,20 @@ export const useStore = create<Store>()(
     },
   ),
 );
+
+/* ---------- đánh dấu bản ghi đổi trên máy này ---------- */
+let marking = false;
+useStore.subscribe((s, prev) => {
+  if (applyingRemote || marking || !s.hydrated) return;
+  const ids: string[] = [];
+  for (const k of BUCKETS) {
+    const cur = s[k] as Record<string, { id: string }>;
+    const old = prev[k] as Record<string, { id: string }>;
+    if (cur === old) continue;
+    for (const id of Object.keys(cur)) if (cur[id] !== old?.[id]) ids.push(id);
+  }
+  if (ids.length) { marking = true; try { s.markPending(ids); } finally { marking = false; } }
+});
 
 /* ---------- payment helpers ---------- */
 export function paymentsOf(t: Truck): Payment[] {
@@ -618,6 +651,16 @@ export const dayPriceOf = (s: Pick<Store, 'dayPrices'>, date: string): DayPrice 
   const d = s.dayPrices?.['dp-' + date];
   return d && !d.deleted ? d : null;
 };
-export const recordsSince = (s: Store, iso: string | null): SyncRecord[] => allRecords(s).filter((r) => !iso || (r.updatedAt || '') > iso);
+/** Các bản ghi đang chờ đẩy (theo id) */
+export const pendingRecords = (s: Store): SyncRecord[] => {
+  const out: SyncRecord[] = [];
+  for (const id of Object.keys(s.pending || {})) {
+    for (const k of BUCKETS) {
+      const r = (s[k] as Record<string, SyncRecord>)[id];
+      if (r) { out.push(r.type === 'photo' ? ({ ...(r as Photo), localUri: undefined } as Photo) : r); break; }
+    }
+  }
+  return out;
+};
 export const userName = (s: Store, id: string | null | undefined): string => (id && s.users[id]?.name) || '';
 export const driverName = (s: Store, id: string | null | undefined): string => (id && s.drivers[id]?.name) || '';
