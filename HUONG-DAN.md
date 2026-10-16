@@ -126,48 +126,54 @@ Cần tài khoản Google Play Console. Hoặc build file APK để cài trực 
 
 ## PHẦN E. Sử dụng app hằng ngày
 
-### E1. Máy quản lý (lần đầu)
-1. Mở app → **Tạo tài khoản quản lý** (tên + PIN 4 số).
-2. **Cài đặt → Liên kết Google Sheets** → dán URL (Phần C).
-3. **Cài đặt → Thông tin trên phiếu cân**: tên cơ sở, địa chỉ, SĐT.
-4. **Cài đặt → Quy ước tạp độ**: xem quy ước mặc định "Trừ kg 1:1", sửa số liệu theo thoả thuận của kho, tạo thêm quy ước khác nếu cần (trừ giá, bảng trừ lùi...).
-5. **Cài đặt → Nhân viên**: thêm từng nhân viên (tên + PIN, vai trò Nhân viên). **Tài xế**, **Người bán**, **Loại hàng**, **Kho** thêm dần khi dùng.
-6. **Cài đặt → Phân quyền**: tắt "Nhân viên thấy giá và tiền" nếu không muốn nhân viên thấy tiền.
+### E1. Lần đầu trên máy quản lý (10 phút)
+1. Mở app → **Tạo tài khoản quản lý**: nhập tên, PIN 4 số, nhập lại PIN → **Tạo tài khoản & bắt đầu**.
+2. **Cài đặt** (bánh răng góc phải) → **Liên kết Google Sheets** → dán URL Apps Script (Phần C) → **Lưu & kiểm tra kết nối**. Thấy "Kết nối OK" là xong.
+3. **Cài đặt → Thông tin trên phiếu cân**: tên cơ sở, địa chỉ, SĐT, dòng cuối phiếu (ví dụ số tài khoản). In trên mọi phiếu.
+4. **Cài đặt → Quy ước tạp độ**: app có sẵn "Trừ kg 1:1" (tạp chuẩn 1%, độ chuẩn 13%, vượt 1% trừ 1% kg). Bấm bút chì để sửa số theo kho của bạn, hoặc **+** để tạo thêm quy ước khác (trừ giá, bảng trừ lùi, chỉ ghi nhận). Đánh dấu một quy ước là **mặc định**.
+5. **Cài đặt → Nhân viên** → **+** → tên, PIN, vai trò *Nhân viên*. Mỗi người một tài khoản để biết ai cân xe nào.
+6. **Cài đặt → Kho**: tạo nếu có từ 2 kho trở lên. **Loại hàng**: ví dụ "Robusta nhân xô", "Cà phê tươi" (có thể gắn quy ước riêng cho từng loại).
+7. **Cài đặt → Phân quyền**: tắt **Nhân viên thấy giá và tiền** nếu không muốn nhân viên thấy giá, thành tiền, công nợ. Đặt **số ngày nhắc công nợ quá hạn**.
 
-### E2. Máy nhân viên (lần đầu)
-1. Cài app (TestFlight hoặc App Store) → mở → bấm **Máy phụ? Liên kết Google Sheets có sẵn** → dán URL do quản lý gửi (qua Zalo).
-2. App tải danh sách nhân viên về → chọn tên → nhập PIN.
+### E2. Lần đầu trên máy nhân viên (2 phút)
+1. Mở app → bấm **Máy phụ? Liên kết Google Sheets có sẵn**.
+2. Dán URL Apps Script (quản lý gửi qua Zalo) → **Liên kết & tải dữ liệu**.
+3. Danh sách nhân viên hiện ra → chọn tên → nhập PIN. Không tạo tài khoản quản lý mới trên máy phụ.
 
-### E3. Quy trình một xe hàng
-1. Trang chủ đúng ngày (mặc định hôm nay). Nhập **Giá tham chiếu** trong ngày nếu có (quản lý).
-2. Bấm **Tạo xe N** → chọn chủ hàng (chọn nhiều người nếu xe chở hàng của nhiều chủ, hoặc gõ tên mới), tài xế, loại hàng, kho, nhân viên cân, kiểu cân (từng bao hoặc cân xe tải) → **Tạo**.
-3. Mỗi chủ hàng là một khối riêng trên màn hình xe (CH 1, CH 2...) với bảng cân, tạp độ, giá, thanh toán và phiếu cân riêng. Bấm **Thêm chủ hàng** nếu phát sinh. Bấm ô trống → gõ số kg → **Tiếp** để sang ô kế tiếp. Hết 25 ô, bấm **Thêm bảng**.
-4. Sai số: **nhấn giữ** ô để sửa (mọi lần sửa đều ghi lịch sử).
-5. Với từng chủ hàng: nhập **Mẫu (g), Tạp (g), Độ (%)**, **Giá**. App tính thực nhận, thành tiền riêng cho mỗi người.
-6. Chụp ảnh mẫu, phiếu giấy nếu muốn (+ Chụp).
-7. Bấm **Xong xe** → xác nhận. Bảng bị khoá; muốn sửa, nhấn giữ "Đã xong" để mở lại.
-8. Bấm **Phiếu cân (PDF)** trong khối của chủ hàng → gửi Zalo cho đúng người. Icon chia sẻ trên đầu màn hình xuất phiếu của cả xe (mỗi chủ hàng một trang).
-9. Trả tiền: **Ghi thanh toán** trong khối của chủ hàng (có thể nhiều lần, tiền mặt/chuyển khoản). Xem tổng nợ theo từng người ở **Công nợ**.
-10. Bốc hàng xong: gạt **Đã bốc**.
+### E3. Thu mua: một xe hàng từ đầu đến cuối
+1. Trang chủ, tab **Thu mua**, ngày mặc định là hôm nay (mũi tên hai bên để đổi ngày).
+2. Quản lý nhập **Giá tham chiếu** trong ngày (thanh xanh phía trên) nếu muốn xe mới tự lấy giá.
+3. Bấm **Tạo xe N** → chọn **chủ hàng** (bấm nhiều người nếu xe chở hàng của nhiều chủ; hoặc gõ tên mới), **tài xế**, **loại hàng**, **nhập kho**, **nhân viên đi cân** (mặc định là người đang đăng nhập), **kiểu cân** → **Tạo Xe N**. App ghi giờ tạo và người tạo.
+4. **Cân từng bao**: bấm một ô trống → bàn phím số hiện ra → gõ số kg → **Tiếp** để nhảy sang ô trống kế tiếp (đi theo cột), **Xong** để đóng. Mỗi bảng 25 ô; hết thì **Thêm bảng**. Tổng từng cột hiện màu đỏ ở dưới, tổng bảng ở góc phải, tổng xe ở thanh trên cùng.
+   **Cân xe tải**: nhập **Xe vào (có hàng)**, **Xe ra (rỗng)**, số bao; nhiều chủ hàng thì chia kg cho từng người, app báo phần chưa chia.
+5. Sai số: **nhấn giữ** ô khoảng nửa giây → sửa → Xong. Bấm thường vào ô đã có số sẽ không sửa được. Mọi lần sửa ghi vào **Lịch sử sửa** (icon đồng hồ) với tên người sửa, giờ, số cũ → số mới.
+6. Khoá bảng khi cân xong bảng đó: bấm nút **Mở/Khoá** cạnh tên bảng. Khoá tất cả: icon ổ khoá trên cùng.
+7. Trong khối của từng chủ hàng: nhập **Mẫu (g)**, **Tạp (g)** (app tự ra % tạp), **Độ (%)**, chọn **quy ước** nếu khác mặc định, nhập **Giá**. App tính trừ bì, trừ tạp, trừ độ, **thực nhận**, **thành tiền**.
+8. Chụp ảnh nếu cần: thẻ **Ảnh** → **+ Chụp** → chọn loại (mẫu hàng, phiếu giấy, xe) → chụp hoặc chọn từ thư viện. Ảnh tự lên Google Drive.
+9. Bấm **Xong xe** ở dưới cùng → xem tổng kết → **Xác nhận**. Các bảng bị khoá, thẻ xanh "Đã xong" hiện trên đầu. Muốn sửa lại: **nhấn giữ** thẻ "Đã xong" hoặc nút "Mở lại xe" → mở lại (có ghi lịch sử).
+10. **Phiếu cân (PDF)** trong khối chủ hàng → chia sẻ qua Zalo cho đúng người. Icon chia sẻ trên cùng xuất phiếu cả xe (mỗi chủ hàng một trang).
+11. Trả tiền: trong khối chủ hàng bấm **Ghi thanh toán** → số tiền (có nút *Trả hết* và cộng nhanh), tiền mặt / chuyển khoản, ghi chú → **Ghi thanh toán**. Trả làm nhiều lần cũng được; trạng thái tự chuyển *Chưa / Một phần / Đã thanh toán*. Nhấn giữ một dòng để xoá lần trả nhập nhầm.
+12. Khi bốc hàng xong: gạt **Đã bốc** trên thẻ thông tin xe.
 
-### E3b. Bán hàng
-1. Trang chủ bấm tab **Bán hàng** → **Tạo chuyến bán N** → chọn khách hàng (có thể nhiều khách), tài xế, loại hàng, **kho xuất**, nhân viên giao, kiểu cân.
-2. Cân như xe thu mua: bảng từng bao hoặc cân xe tải. Nhập tạp, độ theo thoả thuận với khách (chọn quy ước phù hợp), **giá bán**.
-3. **Xong xe** → **Phiếu giao hàng (PDF)** gửi khách. Khách trả tiền: **Ghi thu tiền** (nhiều lần). Khách còn nợ xem ở **Công nợ → Phải thu**.
-4. Tồn kho tự trừ phần đã bán. Báo cáo chọn **Bán hàng** hoặc **Cả hai** để thấy mua vào – bán ra và chênh lệch giá bình quân.
-5. Khách hàng quản lý ở **Cài đặt → Khách hàng**. Một đối tác vừa bán vừa mua thì đặt vai trò **Cả hai**.
+### E4. Bán hàng: một chuyến giao cho khách
+1. Trang chủ bấm tab **Bán hàng** → **Tạo chuyến bán N** → chọn **khách hàng** (nhiều khách nếu giao cho nhiều người), tài xế, loại hàng, **kho xuất**, nhân viên giao, kiểu cân → **Tạo**.
+2. Cân y như xe thu mua (bảng từng bao hoặc xe vào – xe ra). Nhập tạp, độ theo thoả thuận với khách (chọn quy ước phù hợp), **giá bán**.
+3. **Xong xe** → **Phiếu giao hàng (PDF)** gửi khách.
+4. Khách trả tiền: **Ghi thu tiền** (nhiều lần). Khách còn nợ xem ở **Công nợ → Phải thu**.
+5. Tồn kho tự trừ phần đã bán theo kho xuất.
 
-### E4. Theo dõi
-- **Báo cáo**: theo ngày/tuần/tháng, theo người bán/nhân viên/tài xế/loại hàng; **Xuất Excel**.
-- **Tồn kho**: ghi xuất bán, xem tồn từng kho; ghi lệnh hedge để thấy tấn chưa hedge.
-- **Tìm xe**: kính lúp trên trang chủ.
-- **Google Sheets**: mở trên máy tính để xem các trang Xe, Chi tiết cân, Công nợ, Thanh toán, Lịch sử sửa...
-- **Sao lưu**: app tự sao lưu mỗi ngày trong máy. Thỉnh thoảng **Cài đặt → Sao lưu ra file** gửi về Zalo/Email của bạn.
+### E5. Theo dõi và quản lý
+- **Công nợ** (icon ví trên trang chủ hoặc lối tắt): tab **Phải trả** (mình nợ người bán) và **Phải thu** (khách nợ mình). Bấm vào một người → từng xe còn nợ → **Thanh toán / Thu tiền** ngay tại đó, nút gọi điện.
+- **Báo cáo**: chọn kỳ (ngày, tuần, tháng, năm, mũi tên lùi/tiến), lọc **Thu mua / Bán hàng / Cả hai**. Thẻ "Mua vào – bán ra" cho chênh lệch giá bình quân và ước lãi gộp. Nhóm theo ngày, đối tác, nhân viên, tài xế, loại hàng, kho. **Xuất Excel** gửi về máy tính.
+- **Tồn kho**: nhập (xe thu mua) − xuất (chuyến bán + xuất khác) = tồn theo từng kho. **+ Xuất khác** cho xuất kho không qua cân (hao hụt, chuyển kho). Quản lý ghi **lệnh hedge** (lot, tấn/lot) để thấy số tấn chưa hedge.
+- **Tìm xe** (kính lúp): gõ tên người bán, khách, tài xế, biển số, SĐT, ngày; lọc Mua / Bán / Đang cân / Đã xong / Còn nợ / Chưa bốc.
+- **Nhắc việc** (chuông cam trên trang chủ): xe hôm trước chưa bấm xong, xe xong chưa có giá, chưa bốc, công nợ quá hạn hai chiều. Bấm từng dòng để mở xe hoặc người nợ.
+- **Google Sheets** trên máy tính: trang Xe (mỗi chủ hàng một dòng), Chi tiết cân, Thanh toán, Công nợ, Xuất bán, Tồn kho, Hedge, Ảnh, Lịch sử sửa, Đối tác, Giá ngày, Kho, Loại hàng, Quy ước, Nhân viên, Tài xế. Trang **DATA** là dữ liệu gốc, không sửa tay.
+- **Sao lưu**: app tự sao lưu mỗi ngày trong máy (giữ 7 bản). Thỉnh thoảng **Cài đặt → Sao lưu ra file** gửi về Zalo/Email. **Khôi phục từ file** khi đổi máy.
+- **Đổi người dùng**: bấm tên ở góc trái trang chủ → Đăng xuất → chọn tên khác.
 
-### E5. Không có mạng
-Vẫn cân bình thường. Khi có mạng lại, app tự đồng bộ (icon đám mây trên trang chủ). Hai máy cùng sửa một xe thì số cân lấy bản mới hơn, còn các lần trả tiền và lịch sử của cả hai máy đều được giữ.
-
----
+### E6. Khi không có mạng
+Cân, nhập, thanh toán bình thường. Icon đám mây trên trang chủ cho biết trạng thái: xanh là đã đồng bộ, đỏ là lỗi (bấm vào để xem). Có mạng lại app tự gửi. Hai máy cùng sửa một xe: số cân lấy bản mới hơn, còn thanh toán, chủ hàng thêm và lịch sử của cả hai máy đều được giữ; xe đã bấm xong không bị máy cũ mở lại.
 
 ## Khi gặp lỗi
 Chụp màn hình lỗi (hoặc copy nguyên văn dòng lỗi trong cửa sổ lệnh) và gửi cho tôi kèm bước đang làm.
