@@ -27,8 +27,8 @@ export function shiftAnchor(period: Period, anchor: string, dir: 1 | -1): string
   const d = parseDate(anchor);
   if (period === 'day') return addDays(anchor, dir);
   if (period === 'week') return addDays(anchor, 7 * dir);
-  if (period === 'month') { d.setMonth(d.getMonth() + dir); return todayStr(d); }
-  if (period === 'year') { d.setFullYear(d.getFullYear() + dir); return todayStr(d); }
+  if (period === 'month') { d.setDate(1); d.setMonth(d.getMonth() + dir); return todayStr(d); }
+  if (period === 'year') { d.setDate(1); d.setFullYear(d.getFullYear() + dir); return todayStr(d); }
   return anchor;
 }
 

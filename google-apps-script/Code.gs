@@ -14,7 +14,7 @@
  * thì URL cũ mới chạy mã mới.
  *
  * Các trang (sheet) tự tạo:
- *   DATA          : dữ liệu gốc (type, id, updatedAt, deleted, json) – KHÔNG sửa tay
+ *   DATA          : dữ liệu gốc (type, id, updatedAt, deleted, json chia nhiều ô) – KHÔNG sửa tay
  *   Xe            : mỗi xe một dòng + tổng kết
  *   Chi tiết cân  : từng bao
  *   Lịch sử sửa   : mọi thay đổi (ai, lúc nào, cũ → mới)
@@ -100,10 +100,22 @@ function sheet_(name, headers) {
   return sh;
 }
 
+var CHUNK = 45000;           // Google Sheets giới hạn 50.000 ký tự / ô → chia JSON thành nhiều ô
+var DATA_COLS = 5 + 3;       // type, id, updatedAt, deleted, json1..json4 (tối đa ~180k ký tự / bản ghi)
+
 function dataSheet_() {
-  var sh = sheet_(SH_DATA, ['type', 'id', 'updatedAt', 'deleted', 'json']);
-  sh.hideSheet && false; // giữ hiển thị để người dùng thấy, có thể ẩn tay
+  var headers = ['type', 'id', 'updatedAt', 'deleted', 'json', 'json2', 'json3', 'json4'];
+  var sh = sheet_(SH_DATA, headers);
+  if (sh.getLastColumn() < headers.length) sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
   return sh;
+}
+
+function splitJson_(str) {
+  var parts = [];
+  for (var i = 0; i < str.length; i += CHUNK) parts.push(str.substring(i, i + CHUNK));
+  while (parts.length < DATA_COLS - 4) parts.push('');
+  if (parts.length > DATA_COLS - 4) throw new Error('Bản ghi quá lớn (' + str.length + ' ký tự)');
+  return parts;
 }
 
 /** Đọc tất cả bản ghi từ DATA */
@@ -111,12 +123,14 @@ function readAll_() {
   var sh = dataSheet_();
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var rows = sh.getRange(2, 1, last - 1, 5).getValues();
+  var rows = sh.getRange(2, 1, last - 1, DATA_COLS).getValues();
   var out = [];
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
     if (!r[1]) continue;
-    try { out.push(JSON.parse(r[4])); } catch (e) {}
+    var json = '';
+    for (var c = 4; c < DATA_COLS; c++) json += (r[c] === null || r[c] === undefined) ? '' : String(r[c]);
+    try { out.push(JSON.parse(json)); } catch (e) {}
   }
   return out;
 }
@@ -136,17 +150,17 @@ function upsert_(records) {
   for (var k = 0; k < records.length; k++) {
     var r = records[k];
     if (!r || !r.id || !r.type) continue;
-    var rowVals = [r.type, r.id, r.updatedAt || '', r.deleted ? 'TRUE' : '', JSON.stringify(r)];
+    var rowVals = [r.type, r.id, r.updatedAt || '', r.deleted ? 'TRUE' : ''].concat(splitJson_(JSON.stringify(r)));
     var ex = index[r.id];
     if (ex) {
-      if ((r.updatedAt || '') > ex.updatedAt) { sh.getRange(ex.row, 1, 1, 5).setValues([rowVals]); changed++; }
+      if ((r.updatedAt || '') > ex.updatedAt) { sh.getRange(ex.row, 1, 1, DATA_COLS).setValues([rowVals]); changed++; }
     } else {
       appends.push(rowVals);
       index[r.id] = { row: -1, updatedAt: r.updatedAt || '' };
       changed++;
     }
   }
-  if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, 5).setValues(appends);
+  if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, DATA_COLS).setValues(appends);
   return changed;
 }
 
