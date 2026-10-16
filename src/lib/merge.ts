@@ -68,7 +68,7 @@ export function mergeTruck(local: Truck, remote: Truck): Truck {
     if (st === 'done' && doneSrc) {
       merged.status = 'done'; merged.doneAt = doneSrc.doneAt; merged.doneBy = doneSrc.doneBy; merged.doneByName = doneSrc.doneByName;
       merged.tables = merged.tables.map((tb) => ({ ...tb, locked: true }));
-    } else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; }
+    } else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; merged.tables = merged.tables.map((tb) => ({ ...tb, locked: false })); }
   }
   if (deleted) merged.deleted = true;
   return { ...merged, updatedAt: laterThan(base.updatedAt) };

@@ -5,7 +5,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Btn, Card, Field, Input, haptic } from '../components/ui';
 import { activeUsers, useStore } from '../lib/store';
-import { syncNow, testSheetUrl } from '../lib/sync';
+import { linkSheet as doLinkSheet } from '../lib/sync';
 import { C, shadow } from '../lib/theme';
 import { toast } from '../lib/toast';
 
@@ -26,17 +26,11 @@ export default function Login() {
   const [linkMode, setLinkMode] = useState(false);
   const [url, setUrl] = useState('');
   const [linking, setLinking] = useState(false);
-  const setSettings = useStore((s) => s.setSettings);
 
   async function linkSheet() {
-    const u = url.trim();
-    if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(u)) return toast('Link phải có dạng https://script.google.com/macros/s/.../exec', 'err', 3500);
     setLinking(true);
     try {
-      await testSheetUrl(u);
-      setSettings({ sheetUrl: u, lastPush: null, lastSync: null });
-      const r = await syncNow({ full: true });
-      if (!r.ok) throw new Error('error' in r ? r.error : 'Không đồng bộ được');
+      await doLinkSheet(url);
       const n = activeUsers(useStore.getState()).length;
       if (n === 0) toast('Đã liên kết nhưng chưa có nhân viên nào trên Google Sheets. Hãy tạo tài khoản quản lý.', 'info', 4000);
       else { haptic('success'); toast(`Đã nhận ${n} tài khoản. Chọn tên để đăng nhập.`, 'ok', 3000); }

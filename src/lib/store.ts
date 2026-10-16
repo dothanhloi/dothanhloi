@@ -94,6 +94,8 @@ export interface Actions {
   // sync
   mergeRecords: (records: SyncRecord[], opts?: { markPending?: boolean }) => number;
   markPending: (ids: string[]) => void;
+  /** Máy phụ mới: xoá quy ước/cài đặt tự tạo trước khi tải dữ liệu đội về */
+  wipeForLink: () => void;
   clearPending: (ids: string[]) => void;
   resetAll: () => void;
 }
@@ -466,7 +468,7 @@ export const useStore = create<Store>()(
         }),
       removePreset: (id) =>
         set((s) => (s.presets[id] ? { presets: { ...s.presets, [id]: bump(s.presets[id], { deleted: true, isDefault: false }) } } : {})),
-      setDefaultPreset: (id) => get().updatePreset(id, { isDefault: true }),
+      setDefaultPreset: (id) => get().updatePreset(id, { isDefault: true, auto: false } as any),
       ensureDefaultPreset: () => {
         const s = get();
         if (Object.values(s.presets).some((p) => !p.deleted)) return;
@@ -476,7 +478,7 @@ export const useStore = create<Store>()(
         // giữ các giá trị mặc định cũ (độ chuẩn, bì) nếu người dùng đã chỉnh
         base.tareValue = Number(s.settings.tarePerBag) || 0;
         base.moisture = { ...base.moisture, standard: Number(s.settings.moistureStd) || 13 };
-        get().addPreset({ ...base, name: tpl.name, note: tpl.desc, isDefault: true });
+        get().addPreset({ ...base, name: tpl.name, note: tpl.desc, isDefault: true, auto: true } as any);
       },
       applyPreset: (truckId, presetId) => {
         const s = get();
@@ -498,6 +500,7 @@ export const useStore = create<Store>()(
       setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
 
       /* ---------- sync ---------- */
+      wipeForLink: () => set({ presets: {}, configs: {}, pending: {} }),
       markPending: (ids) => { if (ids.length) set((s) => { const pending = { ...s.pending }; for (const id of ids) pending[id] = true; return { pending }; }); },
       clearPending: (ids) => { if (ids.length) set((s) => { const pending = { ...s.pending }; for (const id of ids) delete pending[id]; return { pending }; }); },
       mergeRecords: (records, opts) => {
@@ -534,8 +537,9 @@ export const useStore = create<Store>()(
           changed++;
           if (merged !== r) toPush.push(r.id); // bản gộp (xoá dính) máy chủ chưa có
         }
-        // nhiều quy ước cùng "mặc định" (mỗi máy tự tạo một cái): giữ cái mới nhất
-        const defaults = Object.values(presets).filter((p) => !p.deleted && p.isDefault).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        // nhiều quy ước cùng "mặc định": ưu tiên quy ước do người dùng tạo/chọn, rồi đến bản mới nhất
+        const defaults = Object.values(presets).filter((p) => !p.deleted && p.isDefault)
+          .sort((a, b) => Number(!!(a as any).auto) - Number(!!(b as any).auto) || (b.updatedAt || '').localeCompare(a.updatedAt || ''));
         for (const p of defaults.slice(1)) { presets[p.id] = bump(p, { isDefault: false }); changed++; toPush.push(p.id); }
         // hai máy cùng tạo "Xe N" trong ngày khi mất mạng → đánh lại số cho xe tạo sau
         const byDate: Record<string, Truck[]> = {};
@@ -549,7 +553,7 @@ export const useStore = create<Store>()(
             if (used.has(t.seq) && t.status !== 'done') {
               const seq = maxSeq + 1;
               const isDefaultName = t.name === 'Xe ' + t.seq;
-              trucks[t.id] = bump(t, { seq, name: isDefaultName ? 'Xe ' + seq : t.name, history: [...t.history, { id: uid(), at: nowIso(), by: null, byName: 'Hệ thống', what: 'Đánh lại số xe (trùng khi đồng bộ)', old: t.seq, new: seq, kind: 'status' as HistoryKind }] });
+              trucks[t.id] = bump(t, { seq, name: isDefaultName ? 'Xe ' + seq : t.name, history: [...t.history, { id: `renum-${t.id}-${t.seq}-${seq}`, at: nowIso(), by: null, byName: 'Hệ thống', what: 'Đánh lại số xe (trùng khi đồng bộ)', old: t.seq, new: seq, kind: 'status' as HistoryKind }] });
               used.add(seq); maxSeq = Math.max(maxSeq, seq); changed++; toPush.push(t.id);
             } else { used.add(t.seq); maxSeq = Math.max(maxSeq, t.seq); }
           }
@@ -566,6 +570,7 @@ export const useStore = create<Store>()(
       },
       resetAll: () => {
         set({ users: {}, drivers: {}, trucks: {}, presets: {}, sellers: {}, dayPrices: {}, warehouses: {}, products: {}, sales: {}, hedges: {}, photos: {}, configs: {}, pending: {}, session: { userId: null }, settings: defaultSettings() });
+        get().ensureDefaultPreset();
       },
     }),
     {
@@ -652,10 +657,13 @@ export const datesWithTrucks = (s: Store): { date: string; count: number }[] => 
   return Object.keys(m).sort().reverse().map((date) => ({ date, count: m[date] }));
 };
 export const allRecords = (s: Store): SyncRecord[] => {
-  const photos = Object.values(s.photos || {}).map(({ localUri: _l, ...rest }) => rest as Photo); // không gửi đường dẫn máy
-  return [...Object.values(s.users), ...Object.values(s.drivers), ...Object.values(s.presets || {}), ...Object.values(s.sellers || {}), ...Object.values(s.dayPrices || {}),
-    ...Object.values(s.warehouses || {}), ...Object.values(s.products || {}), ...Object.values(s.sales || {}), ...Object.values(s.hedges || {}), ...photos, ...Object.values(s.trucks)];
+  const out: SyncRecord[] = [];
+  for (const k of BUCKETS) for (const r of Object.values((s[k] || {}) as Record<string, SyncRecord>)) out.push(r.type === 'photo' ? ({ ...(r as Photo), localUri: undefined } as Photo) : r);
+  return out;
 };
+/** Máy phụ mới liên kết: bỏ quy ước/tài khoản tự tạo trên máy để không đè lên dữ liệu của đội */
+export const isFreshDevice = (s: Store): boolean => Object.values(s.users).filter((u) => !u.deleted).length === 0 && Object.values(s.trucks).filter((t) => !t.deleted).length === 0;
+export const isApplyingRemote = (): boolean => applyingRemote;
 export function teamConfigOf(s: Pick<Store, 'configs' | 'settings'>): TeamConfig {
   const c = s.configs?.config;
   if (c && !c.deleted) return { ...c, company: c.company || { name: '', phone: '', address: '', footer: '' } };

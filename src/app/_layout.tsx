@@ -29,8 +29,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     // băm PIN cũ sau khi nhận dữ liệu máy chủ (tránh ghi đè PIN quản lý đã đổi ở máy khác)
     syncNow().then((r) => { if (r.ok || ('off' in r && r.off)) useStore.getState().migratePins(); useStore.getState().ensureDefaultPreset(); });
     runAutoBackup();
+    // chỉ đồng bộ khi có bản ghi mới vào hàng chờ (không phải khi vừa nhận dữ liệu từ máy chủ)
     const unsub = useStore.subscribe((s, prev) => {
-      if (s.trucks !== prev.trucks || s.users !== prev.users || s.drivers !== prev.drivers || s.presets !== prev.presets || s.sellers !== prev.sellers || s.dayPrices !== prev.dayPrices || s.warehouses !== prev.warehouses || s.products !== prev.products || s.sales !== prev.sales || s.hedges !== prev.hedges || s.photos !== prev.photos || s.configs !== prev.configs) scheduleSync();
+      if (s.pending !== prev.pending && Object.keys(s.pending).length > Object.keys(prev.pending || {}).length) scheduleSync();
     });
     return unsub;
   }, [hydrated]);

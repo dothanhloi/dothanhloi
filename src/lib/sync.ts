@@ -1,5 +1,5 @@
 import { nowIso } from './format';
-import { allRecords, pendingRecords, useStore } from './store';
+import { BUCKETS, allRecords, isFreshDevice, pendingRecords, useStore } from './store';
 import { photoBase64 } from './photos';
 import type { SyncRecord } from './types';
 
@@ -60,9 +60,12 @@ export async function syncNow(opts: { full?: boolean } = {}) {
     const changed = useStore.getState().mergeRecords(data.records || []);
     // lastSync dùng giờ máy chủ (receivedAt) để không bỏ sót bản ghi máy khác gửi muộn
     useStore.getState().setSettings({ lastPush: pushedAt, lastSync: data.serverNow || nowIso() });
-    if (data.skipped?.length) console.warn('Máy chủ bỏ qua bản ghi quá lớn:', data.skipped);
+    const skipped = data.skipped || [];
+    if (skipped.length) { console.warn('Máy chủ bỏ qua bản ghi quá lớn:', skipped); useStore.getState().clearPending(skipped); } // không gửi lại mãi
     const uploaded = await uploadPendingPhotos(u);
-    emit({ state: 'ok', at: nowIso(), message: `Đã đồng bộ (${records.length} gửi, ${changed} nhận${uploaded ? `, ${uploaded} ảnh` : ''})` });
+    emit({ state: skipped.length ? 'error' : 'ok', at: nowIso(), message: skipped.length
+      ? `Đã đồng bộ nhưng ${skipped.length} bản ghi quá lớn không lưu được lên Sheets (xe có lịch sử sửa quá dài)`
+      : `Đã đồng bộ (${records.length} gửi, ${changed} nhận${uploaded ? `, ${uploaded} ảnh` : ''})` });
     return { ok: true as const, pushed: records.length, received: changed };
   } catch (e: any) {
     const message = e?.message || String(e);
@@ -70,12 +73,12 @@ export async function syncNow(opts: { full?: boolean } = {}) {
     return { ok: false as const, error: message };
   } finally {
     busy = false;
-    if (rerun) { rerun = false; scheduleSync(); }
+    if (rerun || Object.keys(useStore.getState().pending).length) { rerun = false; scheduleSync(); }
   }
 }
 
 function findRecord(s: ReturnType<typeof useStore.getState>, id: string): unknown {
-  for (const k of ['users', 'drivers', 'trucks', 'presets', 'sellers', 'dayPrices', 'warehouses', 'products', 'sales', 'hedges', 'photos'] as const) {
+  for (const k of BUCKETS) {
     const r = (s[k] as Record<string, unknown>)[id];
     if (r) return r;
   }
@@ -107,6 +110,22 @@ export function scheduleSync() {
   if (!st.settings.sheetUrl || !st.settings.autoSync) return;
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => { syncNow(); }, 3000);
+}
+
+export const SHEET_URL_RE = /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/;
+
+/** Liên kết Google Sheets: kiểm tra link, lưu, đồng bộ toàn bộ. Dùng chung cho màn hình đăng nhập và cài đặt */
+export async function linkSheet(url: string): Promise<{ sheet: string; pushed: number; received: number }> {
+  const u = url.trim();
+  if (!SHEET_URL_RE.test(u)) throw new Error('Link phải có dạng https://script.google.com/macros/s/.../exec');
+  const info = await testSheetUrl(u);
+  const st = useStore.getState();
+  if (isFreshDevice(st)) st.wipeForLink(); // máy phụ mới: không đẩy quy ước/cài đặt tự tạo lên đội
+  st.setSettings({ sheetUrl: u, lastPush: null, lastSync: null });
+  const r = await syncNow({ full: true });
+  if (!r.ok) throw new Error('error' in r ? r.error : 'busy' in r ? 'Đang đồng bộ, thử lại sau' : 'Không đồng bộ được');
+  useStore.getState().ensureDefaultPreset();
+  return { sheet: info.sheet, pushed: r.pushed, received: r.received };
 }
 
 export async function testSheetUrl(u: string) {

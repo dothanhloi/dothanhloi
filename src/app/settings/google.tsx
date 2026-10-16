@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Btn, Card, Field, Input, KV, Switch, TopBar, haptic } from '../../components/ui';
 import { fmtDateTime } from '../../lib/format';
 import { useStore } from '../../lib/store';
-import { getSyncStatus, onSyncStatus, SyncStatus, syncNow, testSheetUrl } from '../../lib/sync';
+import { getSyncStatus, linkSheet, onSyncStatus, SyncStatus, syncNow } from '../../lib/sync';
 import { C } from '../../lib/theme';
 import { toast } from '../../lib/toast';
 
@@ -25,15 +25,11 @@ export default function GoogleSettings() {
   async function saveAndTest() {
     const u = url.trim();
     if (!u) { setSettings({ sheetUrl: '', lastPush: null, lastSync: null }); toast('Đã huỷ liên kết'); return; }
-    if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(u)) return toast('Link phải có dạng https://script.google.com/macros/s/.../exec', 'err', 3500);
     setTesting(true);
     try {
-      const r = await testSheetUrl(u);
-      setSettings({ sheetUrl: u, lastPush: null, lastSync: null });
+      const r = await linkSheet(u);
       haptic('success');
-      toast(`Kết nối OK: ${r.sheet}`, 'ok');
-      const res = await syncNow({ full: true });
-      if (res.ok) toast(`Đồng bộ lần đầu: gửi ${res.pushed}, nhận ${res.received}`, 'ok', 3000);
+      toast(`Kết nối OK: ${r.sheet} · gửi ${r.pushed}, nhận ${r.received}`, 'ok', 3000);
     } catch (e: any) {
       toast('Không kết nối được: ' + (e?.message || e), 'err', 4000);
     } finally { setTesting(false); }

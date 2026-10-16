@@ -55,13 +55,11 @@ function doPost(e) {
     if (action === 'sync' || action === 'push') {
       var incoming = Array.isArray(body.records) ? body.records : [];
       var serverNow = nextServerNow_();
-      var res = upsert_(incoming, serverNow);
+      // ghi + đọc trong một lượt; chỉ parse JSON những dòng có receivedAt > since (giờ máy chủ nhận)
+      var res = upsert_(incoming, serverNow, body.since || '');
       if (res.changed > 0) markDirty_();
       maybeRebuild_();
-      var all = readAllWithMeta_();
-      // trả về theo giờ máy chủ nhận (receivedAt) để máy khác gửi muộn vẫn được chuyển tiếp
-      var out = body.since ? all.filter(function (x) { return x.receivedAt > body.since; }) : all;
-      return json_({ ok: true, upserted: res.changed, skipped: res.skipped, accepted: res.accepted, serverNow: serverNow, records: out.map(function (x) { return x.rec; }) });
+      return json_({ ok: true, upserted: res.changed, skipped: res.skipped, accepted: res.accepted, serverNow: serverNow, records: res.out });
     }
     if (action === 'rebuild') { rebuildViews_(); return json_({ ok: true }); }
     return json_({ ok: false, error: 'Hành động không hỗ trợ: ' + action });
@@ -127,8 +125,18 @@ var SENTINEL = '~';          // chữ đầu mỗi ô json để Sheets không h
 function dataSheet_() {
   var headers = ['type', 'id', 'updatedAt', 'deleted', 'json', 'json2', 'json3', 'json4', 'receivedAt'];
   var sh = sheet_(SH_DATA, headers);
-  if (sh.getLastColumn() < headers.length) sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+  if (sh.getLastColumn() < headers.length) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    // cột giờ dạng văn bản để Sheets không tự đổi ISO string thành ngày
+    sh.getRange(1, 3, sh.getMaxRows(), 1).setNumberFormat('@');
+    sh.getRange(1, COL_RECEIVED, sh.getMaxRows(), 1).setNumberFormat('@');
+  }
   return sh;
+}
+/** Giá trị ô giờ → chuỗi ISO (phòng khi Sheets đã đổi thành Date) */
+function isoOf_(v) {
+  if (v instanceof Date) return v.toISOString();
+  return v === null || v === undefined ? '' : String(v);
 }
 
 /** Chia JSON thành các ô; null nếu quá lớn */
@@ -161,7 +169,7 @@ function readAllWithMeta_() {
     if (!r[1]) continue;
     try {
       var rec = JSON.parse(joinJson_(r));
-      out.push({ rec: rec, receivedAt: String(r[COL_RECEIVED - 1] || r[2] || '') });
+      out.push({ rec: rec, receivedAt: isoOf_(r[COL_RECEIVED - 1]) || isoOf_(r[2]) });
     } catch (e) {}
   }
   return out;
@@ -216,7 +224,7 @@ function mergeTruck_(existing, incoming) {
   if (statusChanged) {
     var src = st === 'done' ? (base.status === 'done' ? base : (other.status === 'done' ? other : base)) : null;
     if (st === 'done') { merged.status = 'done'; merged.doneAt = src.doneAt; merged.doneBy = src.doneBy; merged.doneByName = src.doneByName; (merged.tables || []).forEach(function (tb) { tb.locked = true; }); }
-    else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; }
+    else { merged.status = 'weighing'; merged.doneAt = null; merged.doneBy = null; merged.doneByName = ''; (merged.tables || []).forEach(function (tb) { tb.locked = false; }); }
   }
   if (deleted) merged.deleted = true;
   merged.updatedAt = laterThan_(base.updatedAt);
@@ -231,50 +239,75 @@ function mergeSimple_(existing, incoming) {
   return remoteNewer ? incoming : null;
 }
 
-/** Ghi bản ghi mới hơn (xe: gộp). Trả về {changed, skipped, accepted} */
-function upsert_(records, serverNow) {
-  var result = { changed: 0, skipped: [], accepted: [] };
-  if (!records.length) return result;
+/**
+ * Ghi bản ghi gửi lên (xe: gộp; khác: mới hơn thắng, "đã xoá" dính), rồi trả về các bản ghi có receivedAt > since.
+ * Bản ghi máy gửi lên mà máy chủ lưu nguyên vẹn thì không gửi lại (máy đã có).
+ */
+function upsert_(records, serverNow, since) {
+  var result = { changed: 0, skipped: [], accepted: [], out: [] };
   // cùng id xuất hiện nhiều lần trong một lần gửi → lấy bản cuối
-  var byId = {}; records.forEach(function (r) { if (r && r.id) byId[r.id] = r; });
+  var byId = {}; records.forEach(function (r) { if (r && r.id && r.type) byId[r.id] = r; });
   records = Object.keys(byId).map(function (k) { return byId[k]; });
   var sh = dataSheet_();
   var last = sh.getLastRow();
-  var index = {}; // id -> {row, updatedAt}
   var rows = last >= 2 ? sh.getRange(2, 1, last - 1, DATA_COLS).getValues() : [];
-  for (var i = 0; i < rows.length; i++) if (rows[i][1]) index[rows[i][1]] = { row: i + 2, updatedAt: String(rows[i][2] || ''), raw: rows[i] };
+  var index = {}; // id -> chỉ số trong rows
+  for (var i = 0; i < rows.length; i++) if (rows[i][1]) index[rows[i][1]] = i;
+  var updated = {};  // chỉ số dòng đã sửa
+  var echo = {};     // id máy gửi lên, lưu nguyên vẹn → không trả lại
+  var force = {};    // id máy gửi bản cũ hơn bản máy chủ → luôn trả bản máy chủ về
   var appends = [];
   for (var k = 0; k < records.length; k++) {
     var r = records[k];
-    if (!r || !r.id || !r.type) continue;
-    var ex = index[r.id];
+    var idx = index[r.id];
     var toWrite = null;
-    if (ex) {
+    if (idx !== undefined) {
       var existing = null;
-      try { existing = JSON.parse(joinJson_(ex.raw)); } catch (e) {}
+      try { existing = JSON.parse(joinJson_(rows[idx])); } catch (e) {}
       if (!existing) toWrite = r;
       else if (r.type === 'truck') toWrite = mergeTruck_(existing, r);
       else toWrite = mergeSimple_(existing, r);
     } else toWrite = r;
-    if (!toWrite) { result.accepted.push(r.id); continue; } // máy chủ đã có bản tương đương hoặc mới hơn
+    if (!toWrite) { result.accepted.push(r.id); force[r.id] = true; continue; } // máy chủ đã có bản mới hơn/khác → trả lại cho máy
     var parts = splitJson_(JSON.stringify(toWrite));
     if (!parts) { result.skipped.push(r.id); continue; }
     var rowVals = [toWrite.type, toWrite.id, toWrite.updatedAt || '', toWrite.deleted ? 'TRUE' : ''].concat(parts).concat([serverNow]);
-    if (ex) sh.getRange(ex.row, 1, 1, DATA_COLS).setValues([rowVals]);
-    else appends.push(rowVals);
+    if (idx !== undefined) { rows[idx] = rowVals; updated[idx] = true; }
+    else { index[r.id] = rows.length; rows.push(rowVals); appends.push(rowVals); }
+    if (toWrite === r) echo[r.id] = true; // lưu đúng bản máy gửi → máy đã có
     result.accepted.push(r.id);
     result.changed++;
   }
-  if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, DATA_COLS).setValues(appends);
+  // ghi: ít dòng sửa → ghi từng dòng; nhiều → ghi lại cả vùng một lần
+  var updatedIdx = Object.keys(updated);
+  if (updatedIdx.length > 10) {
+    var n = rows.length - appends.length;
+    if (n > 0) sh.getRange(2, 1, n, DATA_COLS).setValues(rows.slice(0, n));
+  } else {
+    for (var u = 0; u < updatedIdx.length; u++) { var ri = Number(updatedIdx[u]); sh.getRange(ri + 2, 1, 1, DATA_COLS).setValues([rows[ri]]); }
+  }
+  if (appends.length) sh.getRange(last + 1 > 1 ? last + 1 : 2, 1, appends.length, DATA_COLS).setValues(appends);
+  // trả về bản ghi máy chưa có
+  for (var j = 0; j < rows.length; j++) {
+    var row = rows[j];
+    if (!row[1] || echo[row[1]]) continue;
+    var receivedAt = isoOf_(row[COL_RECEIVED - 1]) || isoOf_(row[2]);
+    if (since && !force[row[1]] && !(receivedAt > since)) continue;
+    try { result.out.push(JSON.parse(joinJson_(row))); } catch (e) {}
+  }
   return result;
 }
 
 /* ---------------- dựng lại các trang dễ đọc có tiết chế ---------------- */
 var REBUILD_EVERY_MS = 2 * 60 * 1000;
 function markDirty_() { PropertiesService.getScriptProperties().setProperty('dirty', '1'); }
+function hasRebuildTrigger_() {
+  try { return ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'rebuildIfDirty'; }); } catch (e) { return false; }
+}
 function maybeRebuild_() {
   var props = PropertiesService.getScriptProperties();
   if (props.getProperty('dirty') !== '1') return;
+  if (hasRebuildTrigger_()) return; // đã có trigger 10 phút: không dựng lại trong lúc đồng bộ (giữ khoá ngắn)
   var last = Number(props.getProperty('lastRebuild') || 0);
   if (Date.now() - last < REBUILD_EVERY_MS) return;
   try { rebuildViews_(); props.setProperty('lastRebuild', String(Date.now())); props.deleteProperty('dirty'); } catch (e) { Logger.log('rebuild: ' + e); }

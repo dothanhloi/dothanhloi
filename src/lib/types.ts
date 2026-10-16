@@ -141,6 +141,8 @@ export interface QualityPreset {
   name: string;
   note: string;
   isDefault: boolean;
+  /** true nếu app tự tạo từ mẫu (ưu tiên thấp khi gộp nhiều "mặc định") */
+  auto?: boolean;
   /** Bì: 'perBag' = kg mỗi bao, 'percent' = % tổng thô, 'none' = không trừ */
   tareMode: 'none' | 'perBag' | 'percent';
   tareValue: number;
