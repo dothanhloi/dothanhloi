@@ -1,0 +1,351 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { NumPad } from '../../components/NumPad';
+import { EditingCell, WeighTable } from '../../components/WeighTable';
+import { Btn, Card, ConfirmSheet, Field, IconBtn, Input, InputSheet, KV, Pill, Sheet, Stats, Toggle, TopBar, haptic } from '../../components/ui';
+import { truckStats } from '../../lib/calc';
+import { fmtDateTime, fmtDateVN, fmtKg, fmtMoney, fmtNum, fmtPct, fmtTime, parseNum } from '../../lib/format';
+import { activeDrivers, activeUsers, driverName, selectCurrentUser, useStore, userName } from '../../lib/store';
+import { C, shadow } from '../../lib/theme';
+import { toast } from '../../lib/toast';
+import type { PaymentStatus } from '../../lib/types';
+
+type FieldKey = 'price' | 'gram' | 'impurityGram' | 'moisture' | 'moistureStd' | 'tarePerBag' | 'paidAmount' | 'paymentNote' | 'note' | 'name';
+
+const FIELDS: Record<FieldKey, { title: string; what: string; path: string[]; unit?: string; keyboard: 'decimal' | 'number' | 'text'; hint?: string }> = {
+  name: { title: 'Đổi tên xe', what: 'Tên xe', path: ['name'], keyboard: 'text' },
+  price: { title: 'Giá cà phê', what: 'Giá', path: ['price'], unit: 'đ/kg', keyboard: 'number', hint: 'Giá mua theo kg thực nhận' },
+  gram: { title: 'Mẫu thử', what: 'Mẫu (g)', path: ['sample', 'gram'], unit: 'g', keyboard: 'decimal', hint: 'Khối lượng mẫu lấy ra để kiểm tra, VD 300' },
+  impurityGram: { title: 'Tạp chất trong mẫu', what: 'Tạp (g)', path: ['sample', 'impurityGram'], unit: 'g', keyboard: 'decimal', hint: 'Số gram tạp trong mẫu. App tự tính % tạp = tạp / mẫu' },
+  moisture: { title: 'Độ ẩm', what: 'Độ (%)', path: ['sample', 'moisture'], unit: '%', keyboard: 'decimal', hint: 'Độ ẩm đo được của lô hàng' },
+  moistureStd: { title: 'Độ chuẩn', what: 'Độ chuẩn (%)', path: ['moistureStd'], unit: '%', keyboard: 'decimal', hint: 'Phần độ vượt quá mức này sẽ bị trừ theo %' },
+  tarePerBag: { title: 'Bì mỗi bao', what: 'Bì/bao (kg)', path: ['tarePerBag'], unit: 'kg', keyboard: 'decimal', hint: 'Khối lượng bao bì trừ cho mỗi bao, VD 0.3' },
+  paidAmount: { title: 'Số tiền đã thanh toán', what: 'Đã thanh toán', path: ['payment', 'paidAmount'], unit: 'đ', keyboard: 'number' },
+  paymentNote: { title: 'Ghi chú thanh toán', what: 'Ghi chú TT', path: ['payment', 'note'], keyboard: 'text' },
+  note: { title: 'Ghi chú xe', what: 'Ghi chú', path: ['note'], keyboard: 'text' },
+};
+
+export default function TruckScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const store = useStore();
+  const user = useStore(selectCurrentUser);
+  const t = store.trucks[id || ''];
+  const [editing, setEditing] = useState<EditingCell | null>(null);
+  const [field, setField] = useState<FieldKey | null>(null);
+  const [pickDriver, setPickDriver] = useState(false);
+  const [pickWeigher, setPickWeigher] = useState(false);
+  const [askDone, setAskDone] = useState(false);
+  const [askReopen, setAskReopen] = useState(false);
+  const [askDelete, setAskDelete] = useState(false);
+
+  const s = useMemo(() => (t ? truckStats(t) : null), [t]);
+  const truckId = id || '';
+
+  /* ---------- nhập ô cân (hooks phải đứng trước mọi return) ---------- */
+  const commit = useCallback((e: EditingCell): boolean => {
+    const v = e.text.trim() === '' ? null : parseNum(e.text);
+    if (v !== null && (v === undefined || isNaN(v as number))) { toast('Số không hợp lệ', 'err'); return false; }
+    useStore.getState().setCell(truckId, e.tableIdx, e.col, e.row, v === null ? null : Math.round((v as number) * 10) / 10);
+    return true;
+  }, [truckId]);
+
+  const onCellPress = useCallback((ti: number, c: number, r: number) => {
+    const tr = useStore.getState().trucks[truckId];
+    if (!tr) return;
+    if (tr.status === 'done') return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.');
+    if (tr.tables[ti].locked) return toast('Bảng đang khoá. Bấm “Khoá” để mở.');
+    setEditing((cur) => {
+      if (cur && cur.tableIdx === ti && cur.col === c && cur.row === r) return cur;
+      if (cur) commit(cur);
+      if (tr.tables[ti].cells[c][r] != null) { toast('Nhấn giữ ô để sửa số đã nhập'); return null; }
+      haptic();
+      return { tableIdx: ti, col: c, row: r, text: '' };
+    });
+  }, [truckId, commit]);
+
+  const onCellLongPress = useCallback((ti: number, c: number, r: number) => {
+    const tr = useStore.getState().trucks[truckId];
+    if (!tr) return;
+    if (tr.status === 'done') return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.');
+    if (tr.tables[ti].locked) return toast('Bảng đang khoá. Bấm “Khoá” để mở.');
+    const v = tr.tables[ti].cells[c][r];
+    if (v == null) return;
+    haptic('medium');
+    setEditing((cur) => { if (cur) commit(cur); return { tableIdx: ti, col: c, row: r, text: fmtNum(v) }; });
+    toast('Đang sửa – thay đổi sẽ được lưu vào lịch sử');
+  }, [truckId, commit]);
+
+  const onToggleLock = useCallback((ti: number) => {
+    const st = useStore.getState();
+    const tr = st.trucks[truckId];
+    if (!tr) return;
+    haptic();
+    setEditing((cur) => { if (cur && cur.tableIdx === ti) { commit(cur); return null; } return cur; });
+    st.setTableLocked(truckId, ti, !tr.tables[ti].locked);
+  }, [truckId, commit]);
+
+  if (!t || t.deleted || !s) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <TopBar title="Không tìm thấy xe" onBack={() => router.back()} />
+      </View>
+    );
+  }
+
+  const readOnly = t.status === 'done';
+  const allLocked = t.tables.every((tb) => tb.locked);
+
+  const onKey = (k: string) => setEditing((e) => {
+    if (!e) return e;
+    if (k === 'back') return { ...e, text: e.text.slice(0, -1) };
+    if (k === 'clear') return { ...e, text: '' };
+    if (k === '.' && (e.text.includes('.') || e.text === '')) return k === '.' && e.text === '' ? { ...e, text: '0.' } : e;
+    if (e.text.length >= 8) return e;
+    if (e.text.includes('.') && e.text.split('.')[1].length >= 1) return e; // 1 số lẻ
+    return { ...e, text: e.text + k };
+  });
+
+  const findNextEmpty = (e: EditingCell): EditingCell | null => {
+    const tr = useStore.getState().trucks[t.id];
+    for (let ti = e.tableIdx; ti < tr.tables.length; ti++) {
+      const tb = tr.tables[ti];
+      if (tb.locked) continue;
+      for (let c = 0; c < tb.cells.length; c++) {
+        for (let r = 0; r < tb.cells[c].length; r++) {
+          const after = ti > e.tableIdx || c > e.col || (c === e.col && r > e.row);
+          if (after && tb.cells[c][r] == null) return { tableIdx: ti, col: c, row: r, text: '' };
+        }
+      }
+    }
+    return null;
+  };
+  const onNext = () => { if (!editing) return; if (!commit(editing)) return; const n = findNextEmpty(editing); setEditing(n); if (!n) toast('Đã hết ô trống. Bấm “Thêm bảng” nếu cần.'); };
+  const onDone = () => { if (!editing) return; if (commit(editing)) setEditing(null); };
+
+  /* ---------- trường có bảo vệ (nhấn giữ để sửa) ---------- */
+  const fieldValue = (k: FieldKey): unknown => { let o: any = t; for (const p of FIELDS[k].path) o = o?.[p]; return o; };
+  const guarded = (k: FieldKey) => {
+    const v = fieldValue(k);
+    const empty = v == null || v === '' || (k === 'paidAmount' && Number(v) === 0);
+    return {
+      empty,
+      onPress: () => {
+        if (readOnly) return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.');
+        if (empty) setField(k); else toast('Nhấn giữ để sửa');
+      },
+      onLongPress: () => { if (readOnly) return toast('Xe đã xong. Nhấn giữ “Đã xong” để mở lại.'); haptic('medium'); setField(k); },
+    };
+  };
+  const saveField = (text: string) => {
+    if (!field) return;
+    const f = FIELDS[field];
+    let v: unknown;
+    if (f.keyboard === 'text') v = text.trim();
+    else { const n = parseNum(text); if (n !== null && isNaN(n)) return toast('Số không hợp lệ', 'err'); v = n; }
+    if (field === 'name' && !v) return toast('Tên không được trống', 'err');
+    if (field === 'paidAmount' && v == null) v = 0;
+    if (field === 'tarePerBag' && v == null) v = 0;
+    if (field === 'moistureStd' && v == null) v = 0;
+    store.setField(t.id, f.what, f.path, v);
+    setField(null);
+    haptic('success');
+  };
+
+  const setPayment = (st: PaymentStatus) => {
+    store.setField(t.id, 'Thanh toán', ['payment', 'status'], st, 'status');
+    if (st === 'paid' && s.amount != null && Number(t.payment.paidAmount || 0) === 0) {
+      store.setField(t.id, 'Đã thanh toán', ['payment', 'paidAmount'], Math.round(s.amount));
+    }
+  };
+
+  const title = t.name;
+  const cellLabel = editing ? `${t.tables[editing.tableIdx].name} · Cột ${editing.col + 1} · Bao ${editing.row + 1}` : '';
+
+  return (
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      <TopBar title={title} subtitle={`${fmtDateVN(t.date)} · tạo ${fmtTime(t.createdAt)}${t.createdByName ? ' · ' + t.createdByName : ''}`}
+        onBack={() => { if (editing) commit(editing); router.back(); }}
+        onTitlePress={readOnly ? undefined : () => setField('name')}
+        right={
+          <>
+            <IconBtn name={allLocked ? 'lock-closed' : 'lock-open-outline'} color={allLocked ? 'gray' : 'blue'} onPress={() => { if (readOnly) return toast('Xe đã xong'); haptic(); setEditing(null); store.lockAllTables(t.id, !allLocked); }} />
+            <IconBtn name="time-outline" color="blue" onPress={() => router.push(`/history/${t.id}`)} />
+            <IconBtn name="trash-outline" color="red" onPress={() => setAskDelete(true)} />
+          </>
+        }
+      />
+      <ScrollView contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: (editing ? 330 : 90) + insets.bottom }} keyboardShouldPersistTaps="handled">
+        {readOnly ? (
+          <Pressable onLongPress={() => { haptic('medium'); setAskReopen(true); }} delayLongPress={600} style={st.doneCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={st.doneT}>✓ Đã xong xe · {fmtTime(t.doneAt)}{t.doneByName ? ` · ${t.doneByName}` : ''}</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11 }}>nhấn giữ để mở lại</Text>
+            </View>
+            <Text style={st.doneBig}>{fmtKg(s.gross)} <Text style={{ fontSize: 16 }}>kg thô</Text></Text>
+            <View style={st.doneGrid}>
+              <Text style={st.doneRow}><Text style={st.doneK}>Tổng bao </Text><Text style={st.doneV}>{s.bags}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Thực nhận </Text><Text style={st.doneV}>{fmtKg(s.net)} kg</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Tạp </Text><Text style={st.doneV}>{fmtPct(s.impurityPct)}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Độ </Text><Text style={st.doneV}>{s.moisture != null ? fmtPct(s.moisture, 1) : '—'}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Giá </Text><Text style={st.doneV}>{s.price != null ? fmtMoney(s.price) + '/kg' : '—'}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Thành tiền </Text><Text style={st.doneV}>{fmtMoney(s.amount)}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Đã TT </Text><Text style={st.doneV}>{fmtMoney(s.paid)}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>Còn lại </Text><Text style={st.doneV}>{fmtMoney(s.remaining)}</Text></Text>
+            </View>
+          </Pressable>
+        ) : null}
+
+        <Stats items={[
+          { icon: 'cube-outline', color: C.blue, value: String(s.bags), label: 'Tổng bao' },
+          { icon: 'scale-outline', color: C.green, value: fmtKg(s.gross), unit: 'kg', label: 'Tổng thô' },
+          { icon: 'analytics-outline', color: C.orange, value: fmtKg(s.avg), unit: 'kg', label: 'Trung bình' },
+        ]} />
+
+        {/* Thông tin xe */}
+        <Card>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+            {readOnly ? <Pill text="Đã xong" color="green" icon="checkmark-circle" small /> : <Pill text="Đang cân" color="orange" icon="time-outline" small />}
+            <View style={{ flex: 1 }} />
+            <Toggle value={t.loaded ? 'yes' : 'no'} onChange={(v) => store.setLoaded(t.id, v === 'yes')}
+              options={[{ v: 'no', label: 'Chưa bốc', color: 'red' }, { v: 'yes', label: 'Đã bốc', color: 'green' }]} />
+          </View>
+          <KV label="Tài xế" value={driverName(store, t.driverId) || 'Chọn tài xế'} empty={!t.driverId} onPress={() => !readOnly && setPickDriver(true)} />
+          <KV label="Nhân viên đi cân" value={userName(store, t.weigherId) || 'Chọn nhân viên'} empty={!t.weigherId} onPress={() => !readOnly && setPickWeigher(true)} />
+          <KV label="Giờ tạo xe" sub={t.createdByName ? `bởi ${t.createdByName}` : undefined} value={fmtDateTime(t.createdAt)} />
+          {t.loaded && t.loadedAt ? <KV label="Bốc hàng lúc" value={fmtDateTime(t.loadedAt)} /> : null}
+          <KV label="Ghi chú" value={t.note || 'Thêm ghi chú'} {...guarded('note')} />
+        </Card>
+
+        {/* Bảng cân */}
+        {t.tables.map((tb, i) => (
+          <WeighTable key={tb.id} table={tb} tableIdx={i} editing={editing} readOnly={readOnly}
+            onCellPress={onCellPress} onCellLongPress={onCellLongPress} onToggleLock={onToggleLock} />
+        ))}
+        {!readOnly ? (
+          <View style={{ flexDirection: 'row', gap: 10, marginBottom: 14 }}>
+            <Btn title="Thêm bảng" kind="secondary" icon="add" small onPress={() => { haptic(); store.addTable(t.id); }} style={{ flex: 1 }} />
+            <Btn title="Bớt bảng" kind="ghost" icon="remove" small onPress={() => { if (!store.removeLastTable(t.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }} style={{ flex: 1 }} />
+          </View>
+        ) : null}
+
+        {/* Chất lượng & giá */}
+        <Card title="Chất lượng & giá" right={<Text style={{ fontSize: 11, color: C.muted }}>nhấn giữ để sửa</Text>}>
+          <KV label="Mẫu" value={t.sample.gram != null ? fmtNum(t.sample.gram) : 'Nhập'} unit={t.sample.gram != null ? 'g' : undefined} {...guarded('gram')} />
+          <KV label="Tạp" sub={s.impurityPct ? `= ${fmtPct(s.impurityPct)} · trừ ${fmtKg(s.impurityKg)} kg` : undefined} value={t.sample.impurityGram != null ? fmtNum(t.sample.impurityGram) : 'Nhập'} unit={t.sample.impurityGram != null ? 'g' : undefined} {...guarded('impurityGram')} />
+          <KV label="Độ" sub={s.moisture != null ? (s.moistureExcess > 0 ? `vượt chuẩn ${fmtPct(s.moistureExcess, 1)} · trừ ${fmtKg(s.moistureKg)} kg` : 'đạt chuẩn') : undefined} value={t.sample.moisture != null ? fmtNum(t.sample.moisture) : 'Nhập'} unit={t.sample.moisture != null ? '%' : undefined} {...guarded('moisture')} />
+          <KV label="Độ chuẩn" value={fmtNum(t.moistureStd)} unit="%" {...guarded('moistureStd')} empty={false} />
+          <KV label="Bì mỗi bao" sub={s.tare ? `trừ ${fmtKg(s.tare)} kg` : undefined} value={fmtNum(t.tarePerBag)} unit="kg" {...guarded('tarePerBag')} empty={false} />
+          <KV label="Thực nhận" value={fmtKg(s.net)} unit="kg" highlight="green" />
+          <KV label="Giá" value={t.price != null ? fmtMoney(t.price) : 'Nhập giá'} unit={t.price != null ? '/kg' : undefined} {...guarded('price')} />
+          <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" />
+        </Card>
+
+        {/* Thanh toán */}
+        <Card title="Thanh toán">
+          <View style={{ marginBottom: 6 }}>
+            <Toggle value={t.payment.status} onChange={(v) => { if (readOnly) return toast('Xe đã xong'); setPayment(v); }}
+              options={[{ v: 'unpaid', label: 'Chưa thanh toán', color: 'red' }, { v: 'partial', label: 'Một phần', color: 'orange' }, { v: 'paid', label: 'Đã thanh toán', color: 'green' }]} />
+          </View>
+          <KV label="Đã thanh toán" value={Number(t.payment.paidAmount) > 0 ? fmtMoney(t.payment.paidAmount) : 'Nhập số tiền'} {...guarded('paidAmount')} />
+          <KV label="Còn lại" value={fmtMoney(s.remaining)} highlight={s.remaining != null && s.remaining > 0 ? 'red' : 'green'} />
+          <KV label="Ghi chú TT" value={t.payment.note || 'Thêm ghi chú'} {...guarded('paymentNote')} />
+        </Card>
+
+        <Pressable onPress={() => router.push(`/history/${t.id}`)} style={[st.histLink, shadow]}>
+          <Ionicons name="time-outline" size={18} color={C.blue} />
+          <Text style={{ fontWeight: '700', color: C.blue, flex: 1 }}>Lịch sử sửa ({t.history.length})</Text>
+          <Ionicons name="chevron-forward" size={18} color={C.muted} />
+        </Pressable>
+      </ScrollView>
+
+      {/* Nút dưới */}
+      {!editing ? (
+        <View style={[st.bottom, { paddingBottom: insets.bottom + 10 }]}>
+          {readOnly ? (
+            <Btn title="Mở lại xe (nhấn giữ)" kind="ghost" icon="lock-open-outline" onLongPress={() => { haptic('medium'); setAskReopen(true); }} onPress={() => toast('Nhấn giữ để mở lại xe')} />
+          ) : (
+            <Btn title="Xong xe" kind="success" icon="checkmark-circle" onPress={() => { if (s.bags === 0) return toast('Chưa có bao nào được cân', 'err'); setAskDone(true); }} />
+          )}
+        </View>
+      ) : null}
+
+      {editing ? <NumPad label={cellLabel} value={editing.text} onKey={onKey} onNext={onNext} onDone={onDone} onCancel={() => setEditing(null)} /> : null}
+
+      {/* Sheets */}
+      <InputSheet visible={!!field} onClose={() => setField(null)} title={field ? FIELDS[field].title : ''} label={field ? FIELDS[field].what : undefined}
+        hint={field ? FIELDS[field].hint : undefined} unit={field ? FIELDS[field].unit : undefined} keyboard={field ? FIELDS[field].keyboard : 'text'}
+        big={field ? FIELDS[field].keyboard !== 'text' : false}
+        initial={field ? (() => { const v = fieldValue(field); return v == null ? '' : String(v); })() : ''} onSave={saveField} />
+
+      <Sheet visible={pickDriver} onClose={() => setPickDriver(false)} title="Chọn tài xế" desc="Thêm/sửa tài xế trong Cài đặt → Tài xế">
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+          {activeDrivers(store).map((d) => <Pill key={d.id} text={d.name + (d.plate ? ` · ${d.plate}` : '')} color={t.driverId === d.id ? 'blue' : 'gray'}
+            onPress={() => { store.setField(t.id, 'Tài xế', ['driverId'], d.id); setPickDriver(false); }} />)}
+          {activeDrivers(store).length === 0 ? <Text style={{ color: C.muted }}>Chưa có tài xế nào.</Text> : null}
+        </View>
+        <AddDriverInline onAdded={(id) => { store.setField(t.id, 'Tài xế', ['driverId'], id); setPickDriver(false); }} />
+      </Sheet>
+
+      <Sheet visible={pickWeigher} onClose={() => setPickWeigher(false)} title="Nhân viên đi cân">
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+          {activeUsers(store).map((u) => <Pill key={u.id} text={u.name} color={t.weigherId === u.id ? 'blue' : 'gray'}
+            onPress={() => { store.setField(t.id, 'Nhân viên cân', ['weigherId'], u.id); setPickWeigher(false); }} />)}
+        </View>
+      </Sheet>
+
+      <ConfirmSheet visible={askDone} onClose={() => setAskDone(false)} title={`Xong ${t.name}?`} confirmText="Xác nhận xong xe"
+        desc="Các bảng sẽ bị khoá. Muốn sửa lại phải nhấn giữ để mở xe." onConfirm={() => { setAskDone(false); if (editing) commit(editing); setEditing(null); store.markDone(t.id, true); haptic('success'); toast(`${t.name} đã xong · ${fmtKg(s.gross)} kg`, 'ok', 2500); }}>
+        <Card style={{ backgroundColor: C.bg, shadowOpacity: 0, elevation: 0 }}>
+          <KV label="Tổng bao" value={String(s.bags)} />
+          <KV label="Tổng thô" value={fmtKg(s.gross)} unit="kg" />
+          <KV label="Thực nhận" value={fmtKg(s.net)} unit="kg" highlight="green" />
+          <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" />
+          <KV label="Tài xế" value={driverName(store, t.driverId) || '—'} />
+          <KV label="Nhân viên cân" value={userName(store, t.weigherId) || '—'} />
+          <KV label="Người xác nhận" value={user?.name || '—'} />
+        </Card>
+      </ConfirmSheet>
+
+      <ConfirmSheet visible={askReopen} onClose={() => setAskReopen(false)} title="Mở lại xe để sửa?" confirmText="Mở lại"
+        desc="Việc mở lại sẽ được ghi vào lịch sử." onConfirm={() => { setAskReopen(false); store.markDone(t.id, false); store.lockAllTables(t.id, false); toast('Đã mở lại xe'); }} />
+
+      <ConfirmSheet visible={askDelete} onClose={() => setAskDelete(false)} title={`Xoá ${t.name}?`} confirmText="Xoá xe" danger
+        desc={user?.role === 'admin' ? 'Xe sẽ bị ẩn khỏi danh sách (vẫn còn trên Google Sheets với trạng thái đã xoá).' : 'Chỉ quản lý mới được xoá xe.'}
+        onConfirm={() => { if (user?.role !== 'admin') { setAskDelete(false); return toast('Chỉ quản lý mới được xoá xe', 'err'); } setAskDelete(false); store.removeTruck(t.id); router.back(); }} />
+    </View>
+  );
+}
+
+function AddDriverInline({ onAdded }: { onAdded: (id: string) => void }) {
+  const addDriver = useStore((s) => s.addDriver);
+  const [name, setName] = useState('');
+  const [plate, setPlate] = useState('');
+  return (
+    <View>
+      <Field label="Thêm tài xế mới">
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <View style={{ flex: 2 }}><Input value={name} onChangeText={setName} placeholder="Tên tài xế" /></View>
+          <View style={{ flex: 1 }}><Input value={plate} onChangeText={setPlate} placeholder="Biển số" /></View>
+        </View>
+      </Field>
+      <Btn title="Thêm & chọn" kind="secondary" onPress={() => { if (name.trim().length < 2) return toast('Nhập tên tài xế', 'err'); onAdded(addDriver({ name, plate }).id); }} />
+    </View>
+  );
+}
+
+const st = StyleSheet.create({
+  doneCard: { backgroundColor: C.green, borderRadius: 14, padding: 16, marginBottom: 12, shadowColor: C.green, shadowOpacity: 0.3, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 4 },
+  doneT: { color: '#fff', fontWeight: '700', fontSize: 13, textTransform: 'uppercase', letterSpacing: 0.4 },
+  doneBig: { color: '#fff', fontSize: 30, fontWeight: '800', marginVertical: 6, fontVariant: ['tabular-nums'] },
+  doneGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  doneRow: { width: '50%', color: '#fff', fontSize: 13.5, marginBottom: 4 },
+  doneK: { color: 'rgba(255,255,255,0.85)' },
+  doneV: { fontWeight: '700', color: '#fff', fontVariant: ['tabular-nums'] },
+  histLink: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 12 },
+  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 12, paddingTop: 10, backgroundColor: 'rgba(242,243,247,0.95)' },
+});
