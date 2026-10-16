@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 import { lotStats, lotsOf } from '../lib/calc';
+import { labelsFor } from '../lib/labels';
 import { fmtMoney, parseNum } from '../lib/format';
 import { useStore } from '../lib/store';
 import { C } from '../lib/theme';
@@ -13,7 +14,7 @@ export function PaymentSheet({ truckId, lotId, onClose }: { truckId: string | nu
   const t = useStore((s) => (truckId ? s.trucks[truckId] : undefined));
   const sellerName = useStore((s) => { const lot = t ? lotsOf(t).find((l) => l.id === lotId) : null; return lot?.sellerId ? s.sellers?.[lot.sellerId]?.name || '' : ''; });
   return (
-    <Sheet visible={!!truckId && !!t && !!lotId} onClose={onClose} title={t ? `Thanh toán · ${t.name}${sellerName ? ' · ' + sellerName : ''}` : ''}>
+    <Sheet visible={!!truckId && !!t && !!lotId} onClose={onClose} title={t ? `${labelsFor(t).pay} · ${t.name}${sellerName ? ' · ' + sellerName : ''}` : ''}>
       {t && lotId ? <Body truckId={t.id} lotId={lotId} onClose={onClose} /> : null}
     </Sheet>
   );
@@ -24,6 +25,7 @@ function Body({ truckId, lotId, onClose }: { truckId: string; lotId: string; onC
   const addPayment = useStore((s) => s.addPayment);
   const lot = lotsOf(t).find((l) => l.id === lotId)!;
   const s = lotStats(t, lot);
+  const lb = labelsFor(t);
   const remaining = s.remaining != null ? Math.max(0, Math.round(s.remaining)) : null;
   const [amount, setAmount] = useState(remaining != null && remaining > 0 ? String(remaining) : '');
   const [method, setMethod] = useState<PaymentMethod>('cash');
@@ -42,12 +44,12 @@ function Body({ truckId, lotId, onClose }: { truckId: string; lotId: string; onC
     <>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
         <Text style={{ color: C.muted }}>Thành tiền <Text style={{ fontWeight: '700', color: C.text }}>{fmtMoney(s.amount)}</Text></Text>
-        <Text style={{ color: C.muted }}>Còn lại <Text style={{ fontWeight: '700', color: C.red }}>{fmtMoney(s.remaining)}</Text></Text>
+        <Text style={{ color: C.muted }}>{lb.remaining} <Text style={{ fontWeight: '700', color: C.red }}>{fmtMoney(s.remaining)}</Text></Text>
       </View>
       <Field label="Số tiền (đ)">
         <Input big autoFocus value={amount} onChangeText={setAmount} keyboardType="number-pad" selectTextOnFocus placeholder="0" />
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-          {remaining != null && remaining > 0 ? <Pill text={`Trả hết ${fmtMoney(remaining)}`} color="green" small onPress={() => setAmount(String(remaining))} /> : null}
+          {remaining != null && remaining > 0 ? <Pill text={`${lb.kind === 'sell' ? 'Thu hết' : 'Trả hết'} ${fmtMoney(remaining)}`} color="green" small onPress={() => setAmount(String(remaining))} /> : null}
           {[1_000_000, 5_000_000, 10_000_000, 50_000_000].map((v) => <Pill key={v} text={'+' + fmtMoney(v)} color="gray" small onPress={() => setAmount(String((parseNum(amount) || 0) + v))} />)}
         </View>
       </Field>
@@ -57,7 +59,7 @@ function Body({ truckId, lotId, onClose }: { truckId: string; lotId: string; onC
       <Field label="Ghi chú"><Input value={note} onChangeText={setNote} placeholder="VD: CK Vietcombank, ứng trước đợt 1" /></Field>
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <Btn title="Huỷ" kind="ghost" onPress={onClose} style={{ flex: 1 }} />
-        <Btn title="Ghi thanh toán" kind="success" icon="checkmark" onPress={save} style={{ flex: 2 }} />
+        <Btn title={lb.kind === 'sell' ? 'Ghi thu tiền' : 'Ghi thanh toán'} kind="success" icon="checkmark" onPress={save} style={{ flex: 2 }} />
       </View>
     </>
   );

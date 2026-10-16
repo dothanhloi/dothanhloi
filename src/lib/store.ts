@@ -4,7 +4,7 @@ import { appStorage } from './storage';
 import { laterThan, mergeSimple, mergeTruck } from './merge';
 import { PRESET_TEMPLATES, lotStats, lotsOf, newLot, normalizeTruck, tableStats } from './calc';
 import { COLS, ROWS, nowIso, uid } from './format';
-import type { DayPrice, Driver, Hedge, HistoryKind, Lot, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, TeamConfig, Truck, User, Warehouse, WeighTable } from './types';
+import type { DayPrice, Driver, Hedge, HistoryKind, Lot, PartyKind, Payment, PaymentMethod, Photo, PresetSnapshot, Product, QualityPreset, Sale, Seller, Settings, SyncRecord, TeamConfig, Truck, TruckKind, User, Warehouse, WeighTable } from './types';
 import { hashPin } from './security';
 
 export interface State {
@@ -42,7 +42,7 @@ export interface Actions {
   updateDriver: (id: string, patch: Partial<Driver>) => void;
   removeDriver: (id: string) => void;
   // trucks
-  createTruck: (d: { date: string; driverId: string | null; sellerId?: string | null; sellerIds?: string[]; weigherId: string | null; note?: string; warehouseId?: string | null; productId?: string | null; weighMode?: 'bags' | 'truck' }) => Truck;
+  createTruck: (d: { date: string; kind?: TruckKind; driverId: string | null; sellerId?: string | null; sellerIds?: string[]; weigherId: string | null; note?: string; warehouseId?: string | null; productId?: string | null; weighMode?: 'bags' | 'truck' }) => Truck;
   removeTruck: (id: string) => void;
   setCell: (truckId: string, lotId: string, tableIdx: number, col: number, row: number, value: number | null) => boolean;
   /** trường ở cấp xe (tên, tài xế, kho, ghi chú, cân xe tải...) */
@@ -79,7 +79,7 @@ export interface Actions {
   // cân xe tải
   setWeighMode: (truckId: string, mode: 'bags' | 'truck') => void;
   // sellers (người bán)
-  addSeller: (d: { name: string; phone?: string; address?: string; note?: string }) => Seller;
+  addSeller: (d: { name: string; phone?: string; address?: string; note?: string; kind?: PartyKind }) => Seller;
   updateSeller: (id: string, patch: Partial<Seller>) => void;
   removeSeller: (id: string) => void;
   // payments (sổ thanh toán)
@@ -205,18 +205,19 @@ export const useStore = create<Store>()(
         set((s) => (s.drivers[id] ? { drivers: { ...s.drivers, [id]: bump(s.drivers[id], { deleted: true }) } } : {})),
 
       /* ---------- trucks ---------- */
-      createTruck: ({ date, driverId, sellerId, sellerIds, weigherId, note, warehouseId, productId, weighMode }) => {
+      createTruck: ({ date, kind, driverId, sellerId, sellerIds, weigherId, note, warehouseId, productId, weighMode }) => {
         const s = get();
         const user = s.users[s.session.userId || ''] || null;
-        // kể cả xe đã xoá để số thứ tự không trùng
-        const seq = Object.values(s.trucks).filter((t) => t.date === date).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
+        const k: TruckKind = kind === 'sell' ? 'sell' : 'buy';
+        // số thứ tự riêng cho xe mua và xe bán; kể cả xe đã xoá để không trùng
+        const seq = Object.values(s.trucks).filter((t) => t.date === date && (t.kind === 'sell' ? 'sell' : 'buy') === k).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
         const n = Math.max(1, Number(teamConfigOf(s).tablesPerTruck) || 2);
         const prod = productId ? s.products[productId] : null;
         const dp = (prod?.presetId && s.presets[prod.presetId] && !s.presets[prod.presetId].deleted ? s.presets[prod.presetId] : null) || defaultPresetOf(s);
         const dayPrice = s.dayPrices['dp-' + date];
-        const price0 = dayPrice && !dayPrice.deleted && dayPrice.price != null ? Number(dayPrice.price) : null;
+        const price0 = k === 'buy' && dayPrice && !dayPrice.deleted && dayPrice.price != null ? Number(dayPrice.price) : null;
         const t: Truck = {
-          id: uid(), type: 'truck', date, seq, name: 'Xe ' + seq,
+          id: uid(), type: 'truck', kind: k, date, seq, name: (k === 'sell' ? 'Xuất ' : 'Xe ') + seq,
           driverId: driverId || null,
           warehouseId: warehouseId || null,
           weighMode: weighMode || 'bags',
@@ -455,8 +456,8 @@ export const useStore = create<Store>()(
       },
 
       /* ---------- sellers ---------- */
-      addSeller: ({ name, phone, address, note }) => {
-        const d: Seller = { id: uid(), type: 'seller', name: name.trim(), phone: (phone || '').trim(), address: (address || '').trim(), note: (note || '').trim(), createdAt: nowIso(), updatedAt: nowIso() };
+      addSeller: ({ name, phone, address, note, kind }) => {
+        const d: Seller = { id: uid(), type: 'seller', kind: kind || 'seller', name: name.trim(), phone: (phone || '').trim(), address: (address || '').trim(), note: (note || '').trim(), createdAt: nowIso(), updatedAt: nowIso() };
         set((s) => ({ sellers: { ...s.sellers, [d.id]: d } }));
         return d;
       },
@@ -598,7 +599,7 @@ export const useStore = create<Store>()(
         for (const p of defaults.slice(1)) { presets[p.id] = bump(p, { isDefault: false }); changed++; toPush.push(p.id); }
         // hai máy cùng tạo "Xe N" trong ngày khi mất mạng → đánh lại số cho xe tạo sau
         const byDate: Record<string, Truck[]> = {};
-        for (const t of Object.values(trucks)) if (!t.deleted) (byDate[t.date] || (byDate[t.date] = [])).push(t);
+        for (const t of Object.values(trucks)) if (!t.deleted) { const key = t.date + '|' + (t.kind === 'sell' ? 'sell' : 'buy'); (byDate[key] || (byDate[key] = [])).push(t); }
         for (const list of Object.values(byDate)) {
           // xe đã xong (đã in phiếu) giữ số; chỉ đánh lại số xe đang cân, theo thứ tự tạo
           list.sort((a, b) => (a.status === 'done' ? 0 : 1) - (b.status === 'done' ? 0 : 1) || a.createdAt.localeCompare(b.createdAt));
@@ -607,8 +608,9 @@ export const useStore = create<Store>()(
           for (const t of list) {
             if (used.has(t.seq) && t.status !== 'done') {
               const seq = maxSeq + 1;
-              const isDefaultName = t.name === 'Xe ' + t.seq;
-              trucks[t.id] = bump(t, { seq, name: isDefaultName ? 'Xe ' + seq : t.name, history: [...t.history, { id: `renum-${t.id}-${t.seq}-${seq}`, at: nowIso(), by: null, byName: 'Hệ thống', what: 'Đánh lại số xe (trùng khi đồng bộ)', old: t.seq, new: seq, kind: 'status' as HistoryKind }] });
+              const prefix = t.kind === 'sell' ? 'Xuất ' : 'Xe ';
+              const isDefaultName = t.name === prefix + t.seq;
+              trucks[t.id] = bump(t, { seq, name: isDefaultName ? prefix + seq : t.name, history: [...t.history, { id: `renum-${t.id}-${t.seq}-${seq}`, at: nowIso(), by: null, byName: 'Hệ thống', what: 'Đánh lại số xe (trùng khi đồng bộ)', old: t.seq, new: seq, kind: 'status' as HistoryKind }] });
               used.add(seq); maxSeq = Math.max(maxSeq, seq); changed++; toPush.push(t.id);
             } else { used.add(t.seq); maxSeq = Math.max(maxSeq, t.seq); }
           }
@@ -752,6 +754,10 @@ export const canSeeMoney = (s: Store): boolean => {
 };
 export const activeSellers = (s: Store): Seller[] =>
   Object.values(s.sellers || {}).filter((x) => !x.deleted).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+/** Đối tác theo chiều: 'buy' → người bán (seller/both), 'sell' → khách hàng (buyer/both) */
+export const activeParties = (s: Store, kind: TruckKind): Seller[] =>
+  activeSellers(s).filter((x) => { const k = x.kind || 'seller'; return k === 'both' || (kind === 'sell' ? k === 'buyer' : k === 'seller'); });
+export const kindOfTruck = (t: Pick<Truck, 'kind'>): TruckKind => (t.kind === 'sell' ? 'sell' : 'buy');
 export const sellerName = (s: Store, id: string | null | undefined): string => (id && s.sellers?.[id]?.name) || '';
 export const dayPriceOf = (s: Pick<Store, 'dayPrices'>, date: string): DayPrice | null => {
   const d = s.dayPrices?.['dp-' + date];

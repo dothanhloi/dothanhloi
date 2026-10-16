@@ -44,12 +44,12 @@ export default function Inventory() {
             <View key={r.warehouseId || 'none'} style={st.row}>
               <View style={{ flex: 1 }}>
                 <Text style={st.name}>{r.name}</Text>
-                <Text style={st.sub}>nhập {fmtKg(r.inKg)} ({r.trucks} xe) · xuất {fmtKg(r.outKg)} ({r.sales} lần)</Text>
+                <Text style={st.sub}>nhập {fmtKg(r.inKg)} ({r.trucks} xe) · xuất {fmtKg(r.outKg)} ({r.sales} chuyến/lần)</Text>
               </View>
               <Text style={[st.kg, r.stockKg < 0 && { color: C.red }]}>{fmtKg(r.stockKg)} <Text style={{ fontSize: 11, color: C.muted }}>kg</Text></Text>
             </View>
           ))}
-          <Text style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Nhập = thực nhận của các xe (sau trừ tạp, độ, bì). Gán kho cho xe trên màn hình xe.</Text>
+          <Text style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Nhập = thực nhận của các xe thu mua; xuất = chuyến bán hàng (tab Bán hàng ở trang chủ) + xuất khác ghi ở đây. Gán kho cho xe trên màn hình xe.</Text>
         </Card>
 
         {isAdmin ? (
@@ -62,13 +62,13 @@ export default function Inventory() {
         ) : null}
 
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10, alignItems: 'center' }}>
-          <Pill text={`Xuất bán (${sales.length})`} color={tab === 'sales' ? 'blue' : 'gray'} small onPress={() => setTab('sales')} />
+          <Pill text={`Xuất khác (${sales.length})`} color={tab === 'sales' ? 'blue' : 'gray'} small onPress={() => setTab('sales')} />
           {isAdmin ? <Pill text={`Lệnh hedge (${hedges.length})`} color={tab === 'hedges' ? 'blue' : 'gray'} small onPress={() => setTab('hedges')} /> : null}
           <View style={{ flex: 1 }} />
-          {tab === 'sales' ? <Pill text="+ Xuất bán" color="green" small icon="add" onPress={() => setSaleOpen(true)} /> : null}
+          {tab === 'sales' ? <Pill text="+ Xuất khác" color="green" small icon="add" onPress={() => setSaleOpen(true)} /> : null}
         </View>
 
-        {tab === 'sales' ? (sales.length === 0 ? <Empty icon="arrow-up-circle-outline" text="Chưa ghi lần xuất bán nào" sub="Ghi xuất bán để tính tồn kho" /> : (
+        {tab === 'sales' ? (sales.length === 0 ? <Empty icon="arrow-up-circle-outline" text="Chưa có xuất khác" sub="Bán hàng có cân thì tạo chuyến bán ở trang chủ; mục này cho xuất kho không qua cân (hao hụt, chuyển kho...)" /> : (
           <Card>
             {sales.slice(0, 100).map((x) => (
               <Pressable key={x.id} onLongPress={() => { if (!isAdmin) return; haptic('medium'); setDelSale(x); }} delayLongPress={600} style={st.row}>
@@ -100,7 +100,7 @@ export default function Inventory() {
         ))}
       </ScrollView>
 
-      <Sheet visible={saleOpen} onClose={() => setSaleOpen(false)} title="Ghi xuất bán / xuất kho">
+      <Sheet visible={saleOpen} onClose={() => setSaleOpen(false)} title="Ghi xuất kho khác (không qua cân)">
         {saleOpen ? <SaleForm onClose={() => setSaleOpen(false)} /> : null}
       </Sheet>
       <Sheet visible={hedgeOpen} onClose={() => setHedgeOpen(false)} title="Ghi lệnh hedge">

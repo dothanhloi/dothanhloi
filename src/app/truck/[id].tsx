@@ -11,8 +11,9 @@ import { LotStats, lotsOf, presetOf, truckStats } from '../../lib/calc';
 import { fmtDateTime, fmtDateVN, fmtKg, fmtMoney, fmtNum, fmtPct, fmtTime, parseNum } from '../../lib/format';
 import { PHOTO_KINDS, deletePhotoFile, photoUri, takePhoto } from '../../lib/photos';
 import { presetSummary } from '../../lib/presetText';
+import { labelsFor } from '../../lib/labels';
 import { shareReceipt } from '../../lib/receipt';
-import { activeDrivers, activePresets, activeProducts, activeSellers, activeUsers, activeWarehouses, canSeeMoney, driverName, photosOfTruck, productName, selectCurrentUser, sellerName, useStore, userName, warehouseName } from '../../lib/store';
+import { activeDrivers, activeParties, activePresets, activeProducts, activeUsers, activeWarehouses, canSeeMoney, driverName, photosOfTruck, productName, selectCurrentUser, sellerName, useStore, userName, warehouseName } from '../../lib/store';
 import { C, shadow } from '../../lib/theme';
 import { toast } from '../../lib/toast';
 import type { Lot, PaymentStatus } from '../../lib/types';
@@ -151,6 +152,8 @@ export default function TruckScreen() {
   }
 
   const readOnly = t.status === 'done';
+  const lb = labelsFor(t);
+  const parties = activeParties(store, lb.kind);
   const allLocked = lots.every((l) => l.tables.every((tb) => tb.locked));
   const presets = activePresets(store);
   const money = canSeeMoney(store);
@@ -223,7 +226,7 @@ export default function TruckScreen() {
     try { const p = await takePhoto(t.id, kind, fromLibrary); if (p) { haptic('success'); toast('Đã thêm ảnh', 'ok'); } }
     catch (e: any) { toast(e?.message || String(e), 'err', 3000); }
   };
-  const lotTitle = (lot: Lot, i: number) => sellerName(store, lot.sellerId) || `Chủ hàng ${i + 1}`;
+  const lotTitle = (lot: Lot, i: number) => sellerName(store, lot.sellerId) || `${lb.kind === 'sell' ? 'Khách' : 'Chủ hàng'} ${i + 1}`;
   const cellLabel = (() => {
     if (!editing) return '';
     const lot = lots.find((l) => l.id === editing.lotId);
@@ -234,7 +237,7 @@ export default function TruckScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <TopBar title={t.name} subtitle={`${fmtDateVN(t.date)} · tạo ${fmtTime(t.createdAt)}${t.createdByName ? ' · ' + t.createdByName : ''}`}
+      <TopBar title={t.name} subtitle={`${lb.title} · ${fmtDateVN(t.date)} · tạo ${fmtTime(t.createdAt)}${t.createdByName ? ' · ' + t.createdByName : ''}`}
         onBack={() => { if (editing) commit(editing); router.back(); }}
         onTitlePress={readOnly ? undefined : () => setField({ key: 'name' })}
         right={
@@ -257,12 +260,12 @@ export default function TruckScreen() {
             <View style={st.doneGrid}>
               <Text style={st.doneRow}><Text style={st.doneK}>Tổng bao </Text><Text style={st.doneV}>{s.bags}</Text></Text>
               <Text style={st.doneRow}><Text style={st.doneK}>Thực nhận </Text><Text style={st.doneV}>{fmtKg(s.net)} kg</Text></Text>
-              <Text style={st.doneRow}><Text style={st.doneK}>Chủ hàng </Text><Text style={st.doneV}>{lots.length}</Text></Text>
+              <Text style={st.doneRow}><Text style={st.doneK}>{lb.kind === 'sell' ? 'Khách hàng ' : 'Chủ hàng '}</Text><Text style={st.doneV}>{lots.length}</Text></Text>
               {money ? (
                 <>
                   <Text style={st.doneRow}><Text style={st.doneK}>Thành tiền </Text><Text style={st.doneV}>{fmtMoney(s.amount)}</Text></Text>
-                  <Text style={st.doneRow}><Text style={st.doneK}>Đã TT </Text><Text style={st.doneV}>{fmtMoney(s.paid)}</Text></Text>
-                  <Text style={st.doneRow}><Text style={st.doneK}>Còn lại </Text><Text style={st.doneV}>{fmtMoney(s.remaining)}</Text></Text>
+                  <Text style={st.doneRow}><Text style={st.doneK}>{lb.kind === 'sell' ? 'Đã thu ' : 'Đã TT '}</Text><Text style={st.doneV}>{fmtMoney(s.paid)}</Text></Text>
+                  <Text style={st.doneRow}><Text style={st.doneK}>{lb.kind === 'sell' ? 'Phải thu ' : 'Còn lại '}</Text><Text style={st.doneV}>{fmtMoney(s.remaining)}</Text></Text>
                 </>
               ) : null}
             </View>
@@ -278,14 +281,15 @@ export default function TruckScreen() {
         {/* Thông tin xe */}
         <Card>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+            <Pill text={lb.title} color={lb.kind === 'sell' ? 'green' : 'blue'} small icon={lb.kind === 'sell' ? 'arrow-up-circle' : 'arrow-down-circle'} />
             {readOnly ? <Pill text="Đã xong" color="green" icon="checkmark-circle" small /> : <Pill text="Đang cân" color="orange" icon="time-outline" small />}
             <View style={{ flex: 1 }} />
             <Toggle value={t.loaded ? 'yes' : 'no'} onChange={(v) => store.setLoaded(t.id, v === 'yes')}
               options={[{ v: 'no', label: 'Chưa bốc', color: 'red' }, { v: 'yes', label: 'Đã bốc', color: 'green' }]} />
           </View>
           <KV label="Tài xế" value={driverName(store, t.driverId) || 'Chọn tài xế'} empty={!t.driverId} onPress={() => !readOnly && setPickDriver(true)} />
-          <KV label="Nhập kho" value={warehouseName(store, t.warehouseId) || 'Chọn kho'} empty={!t.warehouseId} onPress={() => !readOnly && setPickWarehouse(true)} />
-          <KV label="Nhân viên đi cân" value={userName(store, t.weigherId) || 'Chọn nhân viên'} empty={!t.weigherId} onPress={() => !readOnly && setPickWeigher(true)} />
+          <KV label={lb.warehouse} value={warehouseName(store, t.warehouseId) || 'Chọn kho'} empty={!t.warehouseId} onPress={() => !readOnly && setPickWarehouse(true)} />
+          <KV label={lb.weigher} value={userName(store, t.weigherId) || 'Chọn nhân viên'} empty={!t.weigherId} onPress={() => !readOnly && setPickWeigher(true)} />
           <KV label="Giờ tạo xe" sub={t.createdByName ? `bởi ${t.createdByName}` : undefined} value={fmtDateTime(t.createdAt)} />
           {t.loaded && t.loadedAt ? <KV label="Bốc hàng lúc" value={fmtDateTime(t.loadedAt)} /> : null}
           <KV label="Ghi chú xe" value={t.note || 'Thêm ghi chú'} {...guarded('note')} />
@@ -310,7 +314,7 @@ export default function TruckScreen() {
         {/* Từng chủ hàng */}
         {lots.map((lot, li) => (
           <LotBlock key={lot.id} lot={lot} index={li} multi={multi} truckId={t.id} ls={s.lots[li]} readOnly={readOnly} money={money} isTruckMode={isTruckMode}
-            title={lotTitle(lot, li)} editing={editing && editing.lotId === lot.id ? editing : null}
+            title={lotTitle(lot, li)} lb={lb} editing={editing && editing.lotId === lot.id ? editing : null}
             onCellPress={onCellPress} onCellLongPress={onCellLongPress} onToggleLock={onToggleLock} guarded={guarded}
             onPickSeller={() => !readOnly && setPickSeller(lot.id)} onPickProduct={() => !readOnly && setPickProduct(lot.id)} onPickPreset={() => { if (readOnly) return toast('Xe đã xong'); setPickPreset(lot.id); }}
             onPay={() => setPayLot(lot.id)} onDelPay={(pid) => setDelPay({ lotId: lot.id, paymentId: pid })} onSetPayment={(v) => setPayment(lot.id, v)}
@@ -319,7 +323,7 @@ export default function TruckScreen() {
             onRemoveTable={() => { const cur = editingRef.current; if (cur) { commit(cur); setEditing(null); } if (!store.removeLastTable(t.id, lot.id)) toast('Chỉ bớt được bảng cuối khi bảng đó trống', 'err'); else haptic(); }}
             onRemoveLot={() => setAskRemoveLot(lot.id)} />
         ))}
-        {!readOnly ? <Btn title="Thêm chủ hàng" kind="secondary" icon="person-add" onPress={() => setAddLotOpen(true)} style={{ marginBottom: 14 }} /> : null}
+        {!readOnly ? <Btn title={lb.kind === 'sell' ? 'Thêm khách hàng' : 'Thêm chủ hàng'} kind="secondary" icon="person-add" onPress={() => setAddLotOpen(true)} style={{ marginBottom: 14 }} /> : null}
 
         {/* Ảnh */}
         <Card title={`Ảnh (${photos.length})`} right={!readOnly ? <Pill text="+ Chụp" color="blue" small icon="camera" onPress={() => setPhotoKind('menu')} /> : undefined}>
@@ -374,7 +378,7 @@ export default function TruckScreen() {
           {activeUsers(store).map((u) => <Pill key={u.id} text={u.name} color={t.weigherId === u.id ? 'blue' : 'gray'} onPress={() => { store.setField(t.id, 'Nhân viên cân', ['weigherId'], u.id); setPickWeigher(false); }} />)}
         </View>
       </Sheet>
-      <Sheet visible={pickWarehouse} onClose={() => setPickWarehouse(false)} title="Nhập vào kho">
+      <Sheet visible={pickWarehouse} onClose={() => setPickWarehouse(false)} title={lb.warehouse}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
           {activeWarehouses(store).map((d) => <Pill key={d.id} text={d.name} color={t.warehouseId === d.id ? 'blue' : 'gray'} onPress={() => { store.setField(t.id, 'Kho', ['warehouseId'], d.id); setPickWarehouse(false); }} />)}
           {activeWarehouses(store).length === 0 ? <Text style={{ color: C.muted }}>Chưa có kho. Thêm trong Cài đặt → Kho.</Text> : null}
@@ -382,13 +386,13 @@ export default function TruckScreen() {
         <Btn title="Quản lý kho" kind="secondary" small onPress={() => { setPickWarehouse(false); router.push('/settings/warehouses'); }} />
       </Sheet>
 
-      <Sheet visible={!!pickSeller} onClose={() => setPickSeller(null)} title="Chọn người bán" desc="Quản lý danh sách trong Cài đặt → Người bán">
+      <Sheet visible={!!pickSeller} onClose={() => setPickSeller(null)} title={`Chọn ${lb.party.toLowerCase()}`} desc={`Quản lý danh sách trong Cài đặt → ${lb.partyPlural}`}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-          {activeSellers(store).map((d) => <Pill key={d.id} text={d.name + (d.phone ? ` · ${d.phone}` : '')} color={lots.find((l) => l.id === pickSeller)?.sellerId === d.id ? 'blue' : 'gray'}
-            onPress={() => { if (pickSeller) store.setLotField(t.id, pickSeller, 'Người bán', ['sellerId'], d.id); setPickSeller(null); }} />)}
-          {activeSellers(store).length === 0 ? <Text style={{ color: C.muted }}>Chưa có người bán nào.</Text> : null}
+          {parties.map((d) => <Pill key={d.id} text={d.name + (d.phone ? ` · ${d.phone}` : '')} color={lots.find((l) => l.id === pickSeller)?.sellerId === d.id ? 'blue' : 'gray'}
+            onPress={() => { if (pickSeller) store.setLotField(t.id, pickSeller, lb.party, ['sellerId'], d.id); setPickSeller(null); }} />)}
+          {parties.length === 0 ? <Text style={{ color: C.muted }}>Chưa có {lb.party.toLowerCase()} nào.</Text> : null}
         </View>
-        <AddSellerInline onAdded={(sid) => { if (pickSeller) store.setLotField(t.id, pickSeller, 'Người bán', ['sellerId'], sid); setPickSeller(null); }} />
+        <AddSellerInline kind={lb.kind} onAdded={(sid) => { if (pickSeller) store.setLotField(t.id, pickSeller, lb.party, ['sellerId'], sid); setPickSeller(null); }} />
       </Sheet>
       <Sheet visible={!!pickProduct} onClose={() => setPickProduct(null)} title="Loại hàng" desc="Chọn loại hàng cũng áp dụng quy ước tạp độ gắn với loại đó (nếu có).">
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
@@ -417,12 +421,12 @@ export default function TruckScreen() {
         <Btn title="Quản lý quy ước" kind="secondary" icon="options" onPress={() => { setPickPreset(null); router.push('/settings/presets'); }} style={{ marginTop: 8 }} />
       </Sheet>
 
-      <Sheet visible={addLotOpen} onClose={() => setAddLotOpen(false)} title="Thêm chủ hàng vào xe" desc="Mỗi chủ hàng có bảng cân, tạp độ, giá và thanh toán riêng.">
+      <Sheet visible={addLotOpen} onClose={() => setAddLotOpen(false)} title={lb.kind === 'sell' ? 'Thêm khách hàng vào chuyến' : 'Thêm chủ hàng vào xe'} desc={`Mỗi ${lb.party.toLowerCase()} có bảng cân, tạp độ, giá và ${lb.pay.toLowerCase()} riêng.`}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-          {activeSellers(store).map((d) => <Pill key={d.id} text={d.name} color="gray" onPress={() => { store.addLot(t.id, d.id); setAddLotOpen(false); haptic('success'); }} />)}
+          {parties.map((d) => <Pill key={d.id} text={d.name} color="gray" onPress={() => { store.addLot(t.id, d.id); setAddLotOpen(false); haptic('success'); }} />)}
         </View>
-        <AddSellerInline onAdded={(sid) => { store.addLot(t.id, sid); setAddLotOpen(false); }} />
-        <Btn title="Thêm chưa chọn người bán" kind="ghost" small onPress={() => { store.addLot(t.id, null); setAddLotOpen(false); }} style={{ marginTop: 8 }} />
+        <AddSellerInline kind={lb.kind} onAdded={(sid) => { store.addLot(t.id, sid); setAddLotOpen(false); }} />
+        <Btn title={`Thêm chưa chọn ${lb.party.toLowerCase()}`} kind="ghost" small onPress={() => { store.addLot(t.id, null); setAddLotOpen(false); }} style={{ marginTop: 8 }} />
       </Sheet>
 
       <PaymentSheet truckId={payLot ? t.id : null} lotId={payLot} onClose={() => setPayLot(null)} />
@@ -462,7 +466,7 @@ export default function TruckScreen() {
           {money ? <KV label="Thành tiền" value={fmtMoney(s.amount)} highlight="blue" /> : null}
           {lots.map((lot, i) => <KV key={lot.id} label={lotTitle(lot, i)} value={`${fmtKg(s.lots[i].net)} kg${money && s.lots[i].amount != null ? ' · ' + fmtMoney(s.lots[i].amount) : ''}`} />)}
           <KV label="Tài xế" value={driverName(store, t.driverId) || '—'} />
-          <KV label="Nhân viên cân" value={userName(store, t.weigherId) || '—'} />
+          <KV label={lb.weigher} value={userName(store, t.weigherId) || '—'} />
           <KV label="Người xác nhận" value={user?.name || '—'} />
         </Card>
       </ConfirmSheet>
@@ -476,9 +480,9 @@ export default function TruckScreen() {
 }
 
 /* ---------- Khối một chủ hàng ---------- */
-function LotBlock({ lot, index, multi, truckId, ls, readOnly, money, isTruckMode, title, editing, onCellPress, onCellLongPress, onToggleLock, guarded,
+function LotBlock({ lot, index, multi, truckId, ls, readOnly, money, isTruckMode, title, lb, editing, onCellPress, onCellLongPress, onToggleLock, guarded,
   onPickSeller, onPickProduct, onPickPreset, onPay, onDelPay, onSetPayment, onShare, sharing, onAddTable, onRemoveTable, onRemoveLot }: {
-  lot: Lot; index: number; multi: boolean; truckId: string; ls: LotStats; readOnly: boolean; money: boolean; isTruckMode: boolean; title: string; editing: EditingCell | null;
+  lot: Lot; index: number; multi: boolean; truckId: string; ls: LotStats; readOnly: boolean; money: boolean; isTruckMode: boolean; title: string; lb: ReturnType<typeof labelsFor>; editing: EditingCell | null;
   onCellPress: (lotId: string, ti: number, c: number, r: number) => void; onCellLongPress: (lotId: string, ti: number, c: number, r: number) => void; onToggleLock: (lotId: string, ti: number) => void;
   guarded: (k: FieldKey, lotId?: string) => { empty: boolean; onPress: () => void; onLongPress: () => void };
   onPickSeller: () => void; onPickProduct: () => void; onPickPreset: () => void; onPay: () => void; onDelPay: (pid: string) => void; onSetPayment: (v: PaymentStatus) => void;
@@ -494,9 +498,9 @@ function LotBlock({ lot, index, multi, truckId, ls, readOnly, money, isTruckMode
   return (
     <View style={[st.lotBlock, multi && { borderColor: LOT_COLORS[index % LOT_COLORS.length] }]}>
       <View style={st.lotHead}>
-        <View style={[st.lotBadge, { backgroundColor: LOT_COLORS[index % LOT_COLORS.length] }]}><Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>{multi ? `CH ${index + 1}` : 'CHỦ HÀNG'}</Text></View>
+        <View style={[st.lotBadge, { backgroundColor: LOT_COLORS[index % LOT_COLORS.length] }]}><Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>{multi ? `${lb.kind === 'sell' ? 'KH' : 'CH'} ${index + 1}` : lb.party.toUpperCase()}</Text></View>
         <Pressable onPress={onPickSeller} style={{ flex: 1 }}>
-          <Text style={[st.lotTitle, !lot.sellerId && { color: C.blue }]} numberOfLines={1}>{lot.sellerId ? title : 'Chọn người bán'}</Text>
+          <Text style={[st.lotTitle, !lot.sellerId && { color: C.blue }]} numberOfLines={1}>{lot.sellerId ? title : `Chọn ${lb.party.toLowerCase()}`}</Text>
           <Text style={{ color: C.muted, fontSize: 12 }}>{ls.bags} bao · {fmtKg(ls.gross)} kg thô · thực nhận {fmtKg(ls.net)} kg</Text>
         </Pressable>
         {multi && !readOnly ? <IconBtn name="close" color="red" size={16} style={{ width: 32, height: 32 }} onPress={onRemoveLot} /> : null}
@@ -508,7 +512,7 @@ function LotBlock({ lot, index, multi, truckId, ls, readOnly, money, isTruckMode
 
       {isTruckMode ? (
         multi ? (
-          <Card title="Phần hàng của chủ hàng này (cân xe tải)">
+          <Card title={`Phần hàng của ${lb.party.toLowerCase()} này (cân xe tải)`}>
             <KV label="Kg hàng" value={lot.truckKg != null ? fmtKg(lot.truckKg) : 'Nhập'} unit={lot.truckKg != null ? 'kg' : undefined} {...guarded('lotKg', lot.id)} />
             <KV label="Số bao" value={lot.truckBags != null ? String(lot.truckBags) : 'Nhập'} unit={lot.truckBags != null ? 'bao' : undefined} {...guarded('lotBags', lot.id)} />
           </Card>
@@ -553,10 +557,10 @@ function LotBlock({ lot, index, multi, truckId, ls, readOnly, money, isTruckMode
       </Card>
 
       {money ? (
-        <Card title="Thanh toán" right={<Pill text={lot.payment.status === 'paid' ? 'Đã thanh toán' : lot.payment.status === 'partial' ? 'Một phần' : 'Chưa thanh toán'} color={lot.payment.status === 'paid' ? 'green' : lot.payment.status === 'partial' ? 'orange' : 'red'} small />}>
+        <Card title={lb.pay} right={<Pill text={lot.payment.status === 'paid' ? lb.paid : lot.payment.status === 'partial' ? lb.partial : lb.unpaid} color={lot.payment.status === 'paid' ? 'green' : lot.payment.status === 'partial' ? 'orange' : 'red'} small />}>
           <KV label="Thành tiền" value={fmtMoney(ls.amount)} />
-          <KV label="Đã thanh toán" sub={payments.length ? `${payments.length} lần` : undefined} value={fmtMoney(ls.paid)} highlight="green" />
-          <KV label="Còn lại" value={fmtMoney(ls.remaining)} highlight={ls.remaining != null && ls.remaining > 0.5 ? 'red' : 'green'} />
+          <KV label={lb.kind === 'sell' ? 'Đã thu' : 'Đã thanh toán'} sub={payments.length ? `${payments.length} lần` : undefined} value={fmtMoney(ls.paid)} highlight="green" />
+          <KV label={lb.remaining} value={fmtMoney(ls.remaining)} highlight={ls.remaining != null && ls.remaining > 0.5 ? 'red' : 'green'} />
           {payments.map((p) => (
             <Pressable key={p.id} onLongPress={() => { if (p.id === 'legacy') return; haptic('medium'); onDelPay(p.id); }} delayLongPress={600} style={st.payRow}>
               <Ionicons name={p.method === 'cash' ? 'cash-outline' : p.method === 'transfer' ? 'card-outline' : 'ellipsis-horizontal-circle-outline'} size={18} color={C.green} />
@@ -567,35 +571,36 @@ function LotBlock({ lot, index, multi, truckId, ls, readOnly, money, isTruckMode
             </Pressable>
           ))}
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-            <Btn title="Ghi thanh toán" kind="success" small icon="add" onPress={onPay} style={{ flex: 1 }} />
+            <Btn title={lb.kind === 'sell' ? 'Ghi thu tiền' : 'Ghi thanh toán'} kind="success" small icon="add" onPress={onPay} style={{ flex: 1 }} />
             {ls.amount == null || ls.remaining == null || ls.remaining > 0.5 ? (
-              <Btn title={lot.payment.status === 'paid' ? 'Đánh dấu chưa TT' : 'Đánh dấu đã TT'} kind="ghost" small onPress={() => onSetPayment(lot.payment.status === 'paid' ? 'unpaid' : 'paid')} style={{ flex: 1 }} />
+              <Btn title={lot.payment.status === 'paid' ? (lb.kind === 'sell' ? 'Đánh dấu chưa thu' : 'Đánh dấu chưa TT') : (lb.kind === 'sell' ? 'Đánh dấu đã thu' : 'Đánh dấu đã TT')} kind="ghost" small onPress={() => onSetPayment(lot.payment.status === 'paid' ? 'unpaid' : 'paid')} style={{ flex: 1 }} />
             ) : null}
           </View>
           <KV label="Ghi chú TT" value={lot.payment.note || 'Thêm ghi chú'} {...guarded('paymentNote', lot.id)} />
-          {payments.length ? <Text style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>Nhấn giữ một dòng thanh toán để xoá (ghi vào lịch sử).</Text> : null}
+          {payments.length ? <Text style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>Nhấn giữ một dòng để xoá (ghi vào lịch sử).</Text> : null}
         </Card>
       ) : null}
-      {money ? <Btn title={sharing ? 'Đang tạo phiếu...' : `Phiếu cân (PDF)${multi ? ' · ' + title : ''}`} kind="secondary" icon="document-text-outline" onPress={onShare} disabled={sharing} style={{ marginBottom: 4 }} /> : null}
+      {money ? <Btn title={sharing ? 'Đang tạo phiếu...' : `${lb.receiptBtn}${multi ? ' · ' + title : ''}`} kind="secondary" icon="document-text-outline" onPress={onShare} disabled={sharing} style={{ marginBottom: 4 }} /> : null}
     </View>
   );
 }
 
 const LOT_COLORS = [C.blue, C.orange, C.green, '#8E44AD', '#C0392B'];
 
-function AddSellerInline({ onAdded }: { onAdded: (id: string) => void }) {
+function AddSellerInline({ onAdded, kind = 'buy' }: { onAdded: (id: string) => void; kind?: 'buy' | 'sell' }) {
   const addSeller = useStore((s) => s.addSeller);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const party = kind === 'sell' ? 'khách hàng' : 'người bán';
   return (
     <View>
-      <Field label="Thêm người bán mới">
+      <Field label={`Thêm ${party} mới`}>
         <View style={{ flexDirection: 'row', gap: 8 }}>
-          <View style={{ flex: 2 }}><Input value={name} onChangeText={setName} placeholder="Tên người bán" /></View>
+          <View style={{ flex: 2 }}><Input value={name} onChangeText={setName} placeholder={`Tên ${party}`} /></View>
           <View style={{ flex: 1 }}><Input value={phone} onChangeText={setPhone} placeholder="SĐT" keyboardType="phone-pad" /></View>
         </View>
       </Field>
-      <Btn title="Thêm & chọn" kind="secondary" onPress={() => { if (name.trim().length < 2) return toast('Nhập tên người bán', 'err'); onAdded(addSeller({ name, phone }).id); }} />
+      <Btn title="Thêm & chọn" kind="secondary" onPress={() => { if (name.trim().length < 2) return toast(`Nhập tên ${party}`, 'err'); onAdded(addSeller({ name, phone, kind: kind === 'sell' ? 'buyer' : 'seller' }).id); }} />
     </View>
   );
 }

@@ -458,7 +458,7 @@ function rebuildViews_() {
   trucks.forEach(function (t) { truckById[t.id] = t; });
 
   // Xe: mỗi chủ hàng một dòng
-  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Chủ hàng', 'Người bán', 'Loại hàng', 'Kho', 'Kiểu cân', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
+  var hdr = ['Ngày', 'Xe', 'Tên xe', 'Loại', 'Chủ hàng', 'Đối tác', 'Loại hàng', 'Kho', 'Kiểu cân', 'Tài xế', 'Nhân viên cân', 'Người tạo', 'Giờ tạo', 'Trạng thái', 'Giờ xong', 'Người xong', 'Bốc hàng',
     'Tổng bao', 'Tổng thô (kg)', 'TB/bao (kg)', 'Quy ước', 'Mẫu (g)', 'Tạp (g)', 'Tạp (%)', 'Trừ tạp (kg)', 'Trừ tạp (đ/kg)', 'Độ (%)', 'Trừ độ (kg)', 'Trừ độ (đ/kg)', 'Trừ bì (kg)',
     'Thực nhận (kg)', 'Giá (đ/kg)', 'Giá sau trừ (đ/kg)', 'Thành tiền (đ)', 'Thanh toán', 'Đã TT (đ)', 'Còn lại (đ)', 'Ghi chú TT', 'Ghi chú', 'Số lần sửa', 'ID xe', 'ID chủ hàng'];
   var rows = [];
@@ -466,7 +466,7 @@ function rebuildViews_() {
     var lots = lotsOf_(t);
     lots.forEach(function (lot, li) {
       var s = lotStats_(t, lot);
-      rows.push([fmtDate_(t.date), t.seq, t.name, lots.length > 1 ? (li + 1) + '/' + lots.length : '1/1', sname(lot.sellerId), pname(lot.productId), wname(t.warehouseId), (t.weighMode || 'bags') === 'truck' ? 'Xe tải' : 'Từng bao', dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
+      rows.push([fmtDate_(t.date), t.seq, t.name, t.kind === 'sell' ? 'Bán' : 'Mua', lots.length > 1 ? (li + 1) + '/' + lots.length : '1/1', sname(lot.sellerId), pname(lot.productId), wname(t.warehouseId), (t.weighMode || 'bags') === 'truck' ? 'Xe tải' : 'Từng bao', dname(t.driverId), uname(t.weigherId), t.createdByName || uname(t.createdBy), fmtTime_(t.createdAt),
         t.status === 'done' ? 'Đã xong' : 'Đang cân', fmtTime_(t.doneAt), t.doneByName || uname(t.doneBy), t.loaded ? 'Đã bốc' : 'Chưa bốc',
         s.bags, round1_(s.gross), round1_(s.avg), s.presetName, nz_(lot.sample && lot.sample.gram), nz_(lot.sample && lot.sample.impurityGram), s.impurityPct == null ? '' : Math.round(s.impurityPct * 100) / 100, round1_(s.impurityKg), Math.round(s.impurityPrice),
         s.moisture == null ? '' : s.moisture, round1_(s.moistureKg), Math.round(s.moisturePrice), round1_(s.tare),
@@ -510,33 +510,34 @@ function rebuildViews_() {
   // Nhân viên, Tài xế
   writeSheet_('Nhân viên', ['Tên', 'Vai trò', 'PIN', 'Trạng thái', 'Tạo lúc', 'ID'], Object.keys(users).map(function (k) { var u = users[k]; return [u.name, u.role === 'admin' ? 'Quản lý' : 'Nhân viên', u.pinHash ? 'đã mã hoá' : 'chưa mã hoá', u.deleted ? 'Đã xoá' : 'Hoạt động', fmtTime_(u.createdAt), u.id]; }));
   // Thanh toán
-  var h4 = ['Thời gian', 'Ngày xe', 'Xe', 'Người bán', 'Số tiền (đ)', 'Hình thức', 'Người ghi', 'Ghi chú', 'ID xe'];
+  var h4 = ['Thời gian', 'Loại', 'Ngày xe', 'Xe', 'Đối tác', 'Số tiền (đ)', 'Hình thức', 'Người ghi', 'Ghi chú', 'ID xe'];
   var r4 = [];
   trucks.forEach(function (t) {
     lotsOf_(t).forEach(function (lot) {
       (lot.payments || []).forEach(function (p) {
-        r4.push([fmtTime_(p.at), fmtDate_(t.date), t.name, sname(lot.sellerId), Number(p.amount) || 0, p.method === 'cash' ? 'Tiền mặt' : p.method === 'transfer' ? 'Chuyển khoản' : 'Khác', p.byName || uname(p.by), p.note || '', t.id]);
+        r4.push([fmtTime_(p.at), t.kind === 'sell' ? 'Thu' : 'Chi', fmtDate_(t.date), t.name, sname(lot.sellerId), Number(p.amount) || 0, p.method === 'cash' ? 'Tiền mặt' : p.method === 'transfer' ? 'Chuyển khoản' : 'Khác', p.byName || uname(p.by), p.note || '', t.id]);
       });
     });
   });
   r4.sort(function (a, b) { return a[0] < b[0] ? 1 : -1; });
   writeSheet_('Thanh toán', h4, r4);
 
-  // Công nợ theo người bán
+  // Công nợ: phải trả (mua) và phải thu (bán)
   var debt = {};
   trucks.forEach(function (t) {
+    var dir = t.kind === 'sell' ? 'Phải thu' : 'Phải trả';
     lotsOf_(t).forEach(function (lot) {
       var s = lotStats_(t, lot);
-      var k = lot.sellerId || '';
-      var d = debt[k] || (debt[k] = { name: k ? (sname(k) || 'Người bán đã xoá') : 'Chưa gán người bán', trucks: 0, kg: 0, amount: 0, paid: 0 });
+      var k = dir + '|' + (lot.sellerId || '');
+      var d = debt[k] || (debt[k] = { dir: dir, name: lot.sellerId ? (sname(lot.sellerId) || 'Đối tác đã xoá') : 'Chưa gán đối tác', trucks: 0, kg: 0, amount: 0, paid: 0, id: lot.sellerId || '' });
       d.trucks++; d.kg += s.net; d.amount += s.amount || 0; d.paid += s.paid;
     });
   });
-  var r5 = Object.keys(debt).map(function (k) { var d = debt[k]; return [d.name, d.trucks, round1_(d.kg), Math.round(d.amount), Math.round(d.paid), Math.round(d.amount - d.paid), k]; });
-  r5.sort(function (a, b) { return b[5] - a[5]; });
-  writeSheet_('Công nợ', ['Người bán', 'Số xe', 'Thực nhận (kg)', 'Thành tiền (đ)', 'Đã trả (đ)', 'Còn nợ (đ)', 'ID'], r5);
+  var r5 = Object.keys(debt).map(function (k) { var d = debt[k]; return [d.dir, d.name, d.trucks, round1_(d.kg), Math.round(d.amount), Math.round(d.paid), Math.round(d.amount - d.paid), d.id]; });
+  r5.sort(function (a, b) { return a[0] === b[0] ? b[6] - a[6] : (a[0] < b[0] ? -1 : 1); });
+  writeSheet_('Công nợ', ['Loại', 'Đối tác', 'Số xe', 'Thực nhận (kg)', 'Thành tiền (đ)', 'Đã trả/thu (đ)', 'Còn lại (đ)', 'ID'], r5);
 
-  writeSheet_('Người bán', ['Tên', 'SĐT', 'Địa chỉ', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(sellers).map(function (k) { var x = sellers[k]; return [x.name, x.phone || '', x.address || '', x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
+  writeSheet_('Đối tác', ['Tên', 'Vai trò', 'SĐT', 'Địa chỉ', 'Ghi chú', 'Trạng thái', 'ID'], Object.keys(sellers).map(function (k) { var x = sellers[k]; return [x.name, x.kind === 'buyer' ? 'Khách hàng' : x.kind === 'both' ? 'Mua & bán' : 'Người bán', x.phone || '', x.address || '', x.note || '', x.deleted ? 'Đã xoá' : 'Hoạt động', x.id]; }));
   dayPrices.sort(function (a, b) { return a.date < b.date ? 1 : -1; });
   writeSheet_('Giá ngày', ['Ngày', 'Giá (đ/kg)', 'Ghi chú', 'Người nhập', 'Cập nhật'], dayPrices.filter(function (x) { return !x.deleted; }).map(function (x) { return [fmtDate_(x.date), x.price == null ? '' : x.price, x.note || '', x.byName || '', fmtTime_(x.updatedAt)]; }));
 
@@ -545,7 +546,7 @@ function rebuildViews_() {
   writeSheet_('Xuất bán', ['Ngày', 'Kho', 'Loại hàng', 'Số kg', 'Giá bán (đ/kg)', 'Thành tiền (đ)', 'Người mua', 'Ghi chú', 'Người ghi', 'ID'],
     sales.map(function (x) { return [fmtDate_(x.date), wname(x.warehouseId), pname(x.productId), x.kg, x.price == null ? '' : x.price, x.price == null ? '' : Math.round(x.kg * x.price), x.buyer || '', x.note || '', x.byName || '', x.id]; }));
   var stock = {};
-  trucks.forEach(function (t) { var k = t.warehouseId || ''; var r = stock[k] || (stock[k] = { name: k ? (wname(k) || 'Kho đã xoá') : 'Chưa gán kho', inKg: 0, outKg: 0 }); r.inKg += truckStats_(t).net; });
+  trucks.forEach(function (t) { var k = t.warehouseId || ''; var r = stock[k] || (stock[k] = { name: k ? (wname(k) || 'Kho đã xoá') : 'Chưa gán kho', inKg: 0, outKg: 0 }); if (t.kind === 'sell') r.outKg += truckStats_(t).net; else r.inKg += truckStats_(t).net; });
   sales.forEach(function (x) { var k = x.warehouseId || ''; var r = stock[k] || (stock[k] = { name: k ? (wname(k) || 'Kho đã xoá') : 'Chưa gán kho', inKg: 0, outKg: 0 }); r.outKg += Number(x.kg) || 0; });
   writeSheet_('Tồn kho', ['Kho', 'Đã nhập (kg)', 'Đã xuất (kg)', 'Tồn (kg)'], Object.keys(stock).map(function (k) { var r = stock[k]; return [r.name, round1_(r.inKg), round1_(r.outKg), round1_(r.inKg - r.outKg)]; }));
   hedges.sort(function (a, b) { return a.date < b.date ? 1 : -1; });

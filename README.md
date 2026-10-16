@@ -13,12 +13,13 @@ Mã nguồn backend Google Sheets nằm trong `google-apps-script/Code.gs`.
 | Giao diện bảng 5 cột, mỗi cột 5 số, tổng ở dưới | Mỗi xe mặc định 2 bảng (BẢNG 1, BẢNG 2), bấm **Thêm bảng** nếu cần. Bấm ô trống → bàn phím số → **Tiếp** để nhảy sang ô trống kế tiếp. |
 | Tổng bao / Tổng thô / Trung bình | Hiện ở đầu màn hình xe, tự cập nhật. |
 | Đã thanh toán / chưa thanh toán | Thẻ **Thanh toán**: sổ trả tiền nhiều lần (tiền mặt / chuyển khoản, ai ghi, lúc nào), trạng thái tự chuyển Chưa – Một phần – Đã, còn lại. |
+| Bán hàng | Trang chủ có hai tab **Thu mua** và **Bán hàng**. Chuyến bán (Xuất 1, 2...) dùng cùng cơ chế: cân bảng hoặc cân xe tải, trừ tạp độ theo quy ước thoả thuận với khách, giá bán, nhiều khách trên một chuyến, **thu tiền** nhiều lần, **phiếu giao hàng** PDF. Khách hàng quản lý ở Cài đặt → Khách hàng (một đối tác có thể vừa bán vừa mua). |
 | Nhiều chủ hàng trên một xe | Khi tạo xe chọn một hoặc nhiều **chủ hàng**; trên xe bấm **Thêm chủ hàng**. Mỗi chủ hàng có bảng cân, tạp độ, quy ước, giá, sổ thanh toán và **phiếu cân riêng**; xe giữ tài xế, nhân viên cân, kho, trạng thái. Cân xe tải với nhiều chủ hàng: chia kg cho từng người, app báo phần chưa chia. |
-| Người bán và công nợ | Màn hình **Công nợ** (icon ví ở trang chủ) tổng hợp còn nợ theo từng người bán trên mọi xe, bấm vào trả tiền ngay. |
+| Công nợ hai chiều | Màn hình **Công nợ** có tab **Phải trả** (nợ người bán) và **Phải thu** (khách nợ mình), bấm vào trả/thu tiền ngay. Nhắc việc báo cả hai chiều quá hạn. |
 | Phiếu cân gửi Zalo | Trên xe bấm **Phiếu cân (PDF)** → chia sẻ qua Zalo, Messages hoặc lưu file. Phiếu khổ A5 có tên cơ sở (nhập ở Cài đặt), bảng từng bao, tạp độ, giá, thành tiền, đã trả, chỗ ký. |
 | Giá tham chiếu theo ngày | Thanh **Giá tham chiếu** ở trang chủ: nhập một lần, xe tạo mới trong ngày tự lấy giá, vẫn sửa riêng từng xe. |
-| Báo cáo | **Báo cáo** (lối tắt trang chủ): theo ngày / tuần / tháng / năm; nhóm theo ngày, người bán, nhân viên, tài xế, loại hàng, kho; **xuất Excel (.xlsx)** nhiều sheet. |
-| Tồn kho, hedge | **Tồn kho**: nhập (thực nhận các xe) − xuất bán = tồn, theo từng kho. Ghi lệnh hedge (lot, tấn/lot) để thấy số tấn chưa hedge. |
+| Báo cáo | **Báo cáo** (lối tắt trang chủ): lọc Thu mua / Bán hàng / Cả hai, thẻ mua vào – bán ra với chênh lệch giá bình quân và ước lãi gộp; theo ngày / tuần / tháng / năm; nhóm theo ngày, người bán, nhân viên, tài xế, loại hàng, kho; **xuất Excel (.xlsx)** nhiều sheet. |
+| Tồn kho, hedge | **Tồn kho**: nhập (xe thu mua) − xuất (chuyến bán hàng + xuất khác không qua cân) = tồn, theo từng kho. Ghi lệnh hedge (lot, tấn/lot) để thấy số tấn chưa hedge. |
 | Loại hàng, kho | Cài đặt → Loại hàng (gắn quy ước tạp độ riêng, tự áp khi chọn), Cài đặt → Kho. Chọn khi tạo xe hoặc trên xe. |
 | Ảnh | Trên xe: chụp / chọn ảnh mẫu hàng, phiếu cân giấy, xe hàng. Ảnh nén ~300 KB, lưu trong máy và tự tải lên Google Drive (thư mục "Cân Cà Phê - Ảnh") khi đã liên kết. |
 | Tìm xe | Icon kính lúp: tìm theo người bán, tài xế, biển số, SĐT, ngày, ghi chú; lọc đang cân / đã xong / còn nợ / chưa bốc. |

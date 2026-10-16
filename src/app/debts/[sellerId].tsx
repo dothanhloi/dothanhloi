@@ -6,13 +6,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PaymentSheet } from '../../components/PaymentSheet';
 import { Btn, Card, Empty, KV, Pill, Stats, TopBar } from '../../components/ui';
 import { lotStats, lotsOf } from '../../lib/calc';
+import { kindOf } from '../../lib/labels';
 import { fmtDateVN, fmtKg, fmtMoney, fmtTime } from '../../lib/format';
 import { canSeeMoney, useStore } from '../../lib/store';
 import { C } from '../../lib/theme';
 import { toast } from '../../lib/toast';
 
 export default function SellerDebt() {
-  const { sellerId } = useLocalSearchParams<{ sellerId: string }>();
+  const { sellerId, kind: kindParam } = useLocalSearchParams<{ sellerId: string; kind?: string }>();
+  const kind = kindParam === 'sell' ? 'sell' : 'buy';
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const store = useStore();
@@ -26,14 +28,14 @@ export default function SellerDebt() {
   const rows = useMemo(() => {
     const out: { t: (typeof allTrucks)[string]; lot: ReturnType<typeof lotsOf>[number]; s: ReturnType<typeof lotStats> }[] = [];
     for (const t of Object.values(allTrucks)) {
-      if (t.deleted) continue;
+      if (t.deleted || kindOf(t) !== kind) continue;
       for (const lot of lotsOf(t)) if ((lot.sellerId || '') === id) out.push({ t, lot, s: lotStats(t, lot) });
     }
     return out.sort((a, b) => (a.t.date === b.t.date ? b.t.seq - a.t.seq : a.t.date < b.t.date ? 1 : -1));
-  }, [allTrucks, id]);
+  }, [allTrucks, id, kind]);
   const total = rows.reduce((a, r) => ({ kg: a.kg + r.s.net, amount: a.amount + (r.s.amount || 0), paid: a.paid + r.s.paid, remaining: a.remaining + (r.s.remaining || 0) }), { kg: 0, amount: 0, paid: 0, remaining: 0 });
   const list = onlyOpen ? rows.filter((r) => (r.s.remaining || 0) > 0.5) : rows;
-  const title = seller ? seller.name : id ? 'Người bán đã xoá' : 'Chưa gán người bán';
+  const title = seller ? seller.name : id ? 'Đối tác đã xoá' : (kind === 'sell' ? 'Chưa gán khách hàng' : 'Chưa gán người bán');
 
   if (!money) {
     return (
@@ -48,9 +50,9 @@ export default function SellerDebt() {
       <TopBar title={title} subtitle={seller ? [seller.phone, seller.address].filter(Boolean).join(' · ') : undefined} onBack={() => router.back()} />
       <ScrollView contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: insets.bottom + 30 }}>
         <Stats items={[
-          { icon: 'leaf-outline', color: C.green, value: fmtKg(total.kg), unit: 'kg', label: 'Đã mua' },
+          { icon: 'leaf-outline', color: C.green, value: fmtKg(total.kg), unit: 'kg', label: kind === 'sell' ? 'Đã bán' : 'Đã mua' },
           { icon: 'cash-outline', color: C.blue, value: fmtMoney(total.amount), label: 'Thành tiền' },
-          { icon: 'alert-circle-outline', color: C.red, value: fmtMoney(total.remaining), label: 'Còn nợ' },
+          { icon: 'alert-circle-outline', color: C.red, value: fmtMoney(total.remaining), label: kind === 'sell' ? 'Còn phải thu' : 'Còn nợ' },
         ]} />
         {seller?.phone ? <Btn title={`Gọi ${seller.phone}`} kind="ghost" small icon="call-outline" onPress={() => Linking.openURL('tel:' + seller.phone).catch(() => toast('Máy này không gọi điện được', 'err'))} style={{ alignSelf: 'flex-start', marginBottom: 10 }} /> : null}
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
@@ -67,9 +69,9 @@ export default function SellerDebt() {
             </Pressable>
             <KV label="Thực nhận" value={fmtKg(s.net)} unit="kg" />
             <KV label="Thành tiền" value={fmtMoney(s.amount)} />
-            <KV label="Đã trả" value={fmtMoney(s.paid)} />
+            <KV label={kind === 'sell' ? 'Đã thu' : 'Đã trả'} value={fmtMoney(s.paid)} />
             <KV label="Còn lại" value={fmtMoney(s.remaining)} highlight={(s.remaining || 0) > 0.5 ? 'red' : 'green'} />
-            {(s.remaining || 0) > 0.5 ? <Btn title="Thanh toán" kind="success" small icon="cash-outline" onPress={() => setPay({ truckId: t.id, lotId: lot.id })} style={{ alignSelf: 'flex-end', marginTop: 8 }} /> : null}
+            {(s.remaining || 0) > 0.5 ? <Btn title={kind === 'sell' ? 'Thu tiền' : 'Thanh toán'} kind="success" small icon="cash-outline" onPress={() => setPay({ truckId: t.id, lotId: lot.id })} style={{ alignSelf: 'flex-end', marginTop: 8 }} /> : null}
             {t.doneAt ? <Text style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Xong xe lúc {fmtTime(t.doneAt)}</Text> : null}
           </Card>
         ))}

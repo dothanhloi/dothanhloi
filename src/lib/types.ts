@@ -68,9 +68,16 @@ export interface Lot {
   truckBags?: number | null;
 }
 
+/** Chiều giao dịch: thu mua (mặc định) hoặc bán hàng */
+export type TruckKind = 'buy' | 'sell';
+/** Đối tác: người bán cho mình, khách mua của mình, hoặc cả hai */
+export type PartyKind = 'seller' | 'buyer' | 'both';
+
 export interface Truck {
   id: string;
   type: 'truck';
+  /** 'buy' = xe thu mua (mặc định), 'sell' = xe bán hàng */
+  kind?: TruckKind;
   date: string; // YYYY-MM-DD
   seq: number;
   name: string;
@@ -178,6 +185,8 @@ export type PresetSnapshot = Pick<QualityPreset, 'id' | 'name' | 'tareMode' | 't
 export interface Seller {
   id: string;
   type: 'seller';
+  /** mặc định 'seller' (người bán); 'buyer' = khách hàng; 'both' */
+  kind?: PartyKind;
   name: string;
   phone: string;
   address: string;

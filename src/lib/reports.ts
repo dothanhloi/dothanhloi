@@ -1,7 +1,8 @@
 import { lotStats, lotsOf, truckStats } from './calc';
+import { kindOf, labelsFor } from './labels';
+import type { TruckKind , Truck } from './types';
 import { addDays, parseDate, todayStr } from './format';
 import { teamConfigOf, type Store } from './store';
-import type { Truck } from './types';
 
 export type Period = 'day' | 'week' | 'month' | 'year' | 'custom';
 
@@ -43,8 +44,8 @@ function addStats(a: Agg, s: { bags: number; gross: number; net: number; amount:
 }
 function addTo(a: Agg, t: Truck) { addStats(a, truckStats(t)); }
 
-export function trucksInRange(store: Pick<Store, 'trucks'>, from: string, to: string, filter?: (t: Truck) => boolean): Truck[] {
-  return Object.values(store.trucks).filter((t) => !t.deleted && t.date >= from && t.date <= to && (!filter || filter(t))).sort((a, b) => (a.date === b.date ? a.seq - b.seq : a.date.localeCompare(b.date)));
+export function trucksInRange(store: Pick<Store, 'trucks'>, from: string, to: string, kind?: TruckKind | 'all', filter?: (t: Truck) => boolean): Truck[] {
+  return Object.values(store.trucks).filter((t) => !t.deleted && t.date >= from && t.date <= to && (!kind || kind === 'all' || kindOf(t) === kind) && (!filter || filter(t))).sort((a, b) => (a.date === b.date ? a.seq - b.seq : a.date.localeCompare(b.date)));
 }
 
 export type GroupBy = 'seller' | 'weigher' | 'driver' | 'product' | 'warehouse' | 'date';
@@ -93,8 +94,8 @@ export function stockByWarehouse(store: Store): StockRow[] {
   for (const t of Object.values(store.trucks)) {
     if (t.deleted) continue;
     const r = get(t.warehouseId);
-    r.inKg += truckStats(t).net;
-    r.trucks++;
+    if (kindOf(t) === 'sell') { r.outKg += truckStats(t).net; r.sales++; }
+    else { r.inKg += truckStats(t).net; r.trucks++; }
   }
   for (const s of Object.values(store.sales || {})) {
     if (s.deleted) continue;
@@ -126,7 +127,8 @@ export function reminders(store: Store): Reminder[] {
   const overdueBySeller: Record<string, { name: string; amount: number; n: number }> = {};
   for (const t of Object.values(store.trucks)) {
     if (t.deleted) continue;
-    if (t.status !== 'done' && t.date < today) out.push({ kind: 'unfinished', text: `${t.name} ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} chưa bấm xong xe`, truckId: t.id });
+    const lb = labelsFor(t);
+    if (t.status !== 'done' && t.date < today) out.push({ kind: 'unfinished', text: `${t.name} (${lb.chip.toLowerCase()}) ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} chưa bấm xong xe`, truckId: t.id });
     if (t.status === 'done' && lotsOf(t).some((l) => l.price == null)) out.push({ kind: 'noprice', text: `${t.name} ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} đã xong nhưng chưa có giá`, truckId: t.id });
     if (t.status === 'done' && !t.loaded && t.date < today) out.push({ kind: 'unloaded', text: `${t.name} ngày ${t.date.split('-').reverse().slice(0, 2).join('/')} chưa đánh dấu bốc hàng`, truckId: t.id });
     if (t.status === 'done' && t.doneAt) {
@@ -134,14 +136,15 @@ export function reminders(store: Store): Reminder[] {
       if (days >= dueDays) for (const lot of lotsOf(t)) {
         const ls = lotStats(t, lot);
         if (ls.remaining == null || ls.remaining <= 0.5) continue;
-        const k = lot.sellerId || '';
-        const o = overdueBySeller[k] || (overdueBySeller[k] = { name: k ? store.sellers?.[k]?.name || 'Người bán đã xoá' : 'Chưa gán người bán', amount: 0, n: 0 });
+        const k = (kindOf(t) === 'sell' ? 'thu|' : 'tra|') + (lot.sellerId || '');
+        const o = overdueBySeller[k] || (overdueBySeller[k] = { name: lot.sellerId ? store.sellers?.[lot.sellerId]?.name || 'Đối tác đã xoá' : `Chưa gán ${lb.party.toLowerCase()}`, amount: 0, n: 0 });
         o.amount += ls.remaining; o.n++;
       }
     }
   }
   for (const [k, o] of Object.entries(overdueBySeller)) {
-    out.push({ kind: 'overdue', text: `Còn nợ ${o.name}: ${Math.round(o.amount).toLocaleString('vi-VN')} đ (${o.n} xe quá ${dueDays} ngày)`, sellerId: k || 'none' });
+    const [dir, sid] = k.split('|');
+    out.push({ kind: 'overdue', text: dir === 'thu' ? `${o.name} còn nợ mình: ${Math.round(o.amount).toLocaleString('vi-VN')} đ (${o.n} xe quá ${dueDays} ngày)` : `Còn nợ ${o.name}: ${Math.round(o.amount).toLocaleString('vi-VN')} đ (${o.n} xe quá ${dueDays} ngày)`, sellerId: (sid || 'none') + (dir === 'thu' ? '?kind=sell' : '') });
   }
   return out.slice(0, 20);
 }

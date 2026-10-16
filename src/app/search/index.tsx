@@ -4,11 +4,12 @@ import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-n
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Empty, Input, Pill, TopBar } from '../../components/ui';
 import { lotsOf, truckStats } from '../../lib/calc';
+import { kindOf } from '../../lib/labels';
 import { fmtDateVN, fmtKg, fmtMoney } from '../../lib/format';
 import { canSeeMoney, driverName, productName, sellerNamesOf, useStore, userName } from '../../lib/store';
 import { C, shadow } from '../../lib/theme';
 
-type StatusF = 'all' | 'weighing' | 'done' | 'debt' | 'unloaded';
+type StatusF = 'all' | 'buy' | 'sell' | 'weighing' | 'done' | 'debt' | 'unloaded';
 
 export default function Search() {
   const router = useRouter();
@@ -24,6 +25,8 @@ export default function Search() {
     return Object.values(store.trucks).filter((t) => {
       if (t.deleted) return false;
       const s = truckStats(t);
+      if (status === 'buy' && kindOf(t) !== 'buy') return false;
+      if (status === 'sell' && kindOf(t) !== 'sell') return false;
       if (status === 'weighing' && t.status !== 'weighing') return false;
       if (status === 'done' && t.status !== 'done') return false;
       if (status === 'debt' && !(s.remaining != null && s.remaining > 0.5)) return false;
@@ -42,7 +45,7 @@ export default function Search() {
       <View style={{ paddingHorizontal: 12 }}>
         <Input value={q} onChangeText={setQ} placeholder="Tên người bán, tài xế, biển số, SĐT, ngày, ghi chú..." autoFocus style={{ marginBottom: 8 }} clearButtonMode="while-editing" />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 10 }}>
-          {([['all', 'Tất cả'], ['weighing', 'Đang cân'], ['done', 'Đã xong'], ['debt', 'Còn nợ'], ['unloaded', 'Chưa bốc']] as [StatusF, string][]).map(([v, l]) => (
+          {([['all', 'Tất cả'], ['buy', 'Mua'], ['sell', 'Bán'], ['weighing', 'Đang cân'], ['done', 'Đã xong'], ['debt', 'Còn nợ'], ['unloaded', 'Chưa bốc']] as [StatusF, string][]).map(([v, l]) => (
             <Pill key={v} text={l} color={status === v ? 'blue' : 'gray'} small onPress={() => setStatus(v)} />
           ))}
         </ScrollView>
@@ -55,7 +58,7 @@ export default function Search() {
           return (
             <Pressable onPress={() => router.push(`/truck/${t.id}`)} style={({ pressed }) => [st.row, shadow, pressed && { opacity: 0.7 }]}>
               <View style={{ flex: 1 }}>
-                <Text style={st.name}>{fmtDateVN(t.date)} · {t.name}{sellerNamesOf(store, t) ? ` · ${sellerNamesOf(store, t)}` : ''}</Text>
+                <Text style={st.name}>{fmtDateVN(t.date)} · {t.name}{kindOf(t) === 'sell' ? ' (bán)' : ''}{sellerNamesOf(store, t) ? ` · ${sellerNamesOf(store, t)}` : ''}</Text>
                 <Text style={st.sub}>{[driverName(store, t.driverId) && `TX ${driverName(store, t.driverId)}`, userName(store, t.weigherId) && `cân ${userName(store, t.weigherId)}`, t.status === 'done' ? 'đã xong' : 'đang cân', t.loaded ? 'đã bốc' : 'chưa bốc'].filter(Boolean).join(' · ')}</Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>

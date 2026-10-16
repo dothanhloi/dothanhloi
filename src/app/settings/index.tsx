@@ -85,8 +85,9 @@ export default function Settings() {
 
         <Card title="Quản lý">
           <Row icon="people" color={C.blue} title="Nhân viên" sub={`${activeUsers(store).length} tài khoản · ai cân hàng sẽ hiện tên trên xe`} onPress={() => router.push('/settings/users')} />
-          <Row icon="person" color={C.green} title="Người bán" sub={`${activeSellers(store).length} người bán · xem công nợ từng người`} onPress={() => router.push('/settings/sellers')} />
-          <Row icon="wallet" color={C.red} title="Công nợ" sub="Tổng còn nợ theo người bán, ghi thanh toán" onPress={() => router.push('/debts')} />
+          <Row icon="person" color={C.green} title="Người bán" sub={`${activeSellers(store).filter((x) => (x.kind || 'seller') !== 'buyer').length} người bán · xem công nợ từng người`} onPress={() => router.push('/settings/sellers')} />
+          <Row icon="storefront" color={C.orange} title="Khách hàng" sub={`${activeSellers(store).filter((x) => x.kind === 'buyer' || x.kind === 'both').length} khách mua hàng của bạn`} onPress={() => router.push('/settings/sellers?kind=buyer')} />
+          <Row icon="wallet" color={C.red} title="Công nợ" sub="Phải trả người bán và phải thu khách hàng" onPress={() => router.push('/debts')} />
           <Row icon="car" color={C.orange} title="Tài xế" sub={`${activeDrivers(store).length} tài xế`} onPress={() => router.push('/settings/drivers')} />
           <Row icon="leaf" color={C.green} title="Loại hàng" sub={`${activeProducts(store).length} loại · gắn quy ước tạp độ riêng`} onPress={() => router.push('/settings/products')} />
           <Row icon="home" color={C.blue} title="Kho" sub={`${activeWarehouses(store).length} kho · theo dõi tồn kho`} onPress={() => router.push('/settings/warehouses')} />

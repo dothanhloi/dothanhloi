@@ -3,6 +3,7 @@ import * as Sharing from 'expo-sharing';
 import { lotStats, lotsOf, presetOf, truckStats } from './calc';
 import { fmtDateTime, fmtDateVN, fmtKg, fmtMoney, fmtNum, fmtPct, fmtTime } from './format';
 import { presetSummary } from './presetText';
+import { labelsFor } from './labels';
 import { Store, teamConfigOf } from './store';
 import type { Lot, Truck } from './types';
 
@@ -70,16 +71,17 @@ function lotPage(t: Truck, lot: Lot, st: Store, idx: number, total: number): str
   const product = lot.productId ? st.products?.[lot.productId]?.name : '';
   const pays = lot.payments || [];
   const truckMode = (t.weighMode || 'bags') === 'truck';
-  const lotTag = total > 1 ? ` · Chủ hàng ${idx + 1}/${total}` : '';
+  const lb = labelsFor(t);
+  const lotTag = total > 1 ? ` · ${lb.kind === 'sell' ? 'Khách' : 'Chủ hàng'} ${idx + 1}/${total}` : '';
   return `<div class="page">
 <div class="co">${co.name ? `<b>${esc(co.name)}</b><br>` : ''}${[co.address, co.phone ? 'ĐT: ' + co.phone : ''].filter(Boolean).map(esc).join(' · ')}</div>
-<h1>PHIẾU CÂN CÀ PHÊ</h1>
+<h1>${lb.receiptTitle}</h1>
 <div class="head"><span>Số: <b>${esc(t.name)}</b>${esc(lotTag)} ngày ${fmtDateVN(t.date)}</span><span>Giờ cân: ${fmtTime(t.createdAt)}${t.doneAt ? ' – ' + fmtTime(t.doneAt) : ''}</span></div>
 <table class="info">
-${kv('Người bán', seller ? `${esc(seller.name)}${seller.phone ? ' · ' + esc(seller.phone) : ''}${seller.address ? '<br><span style="font-weight:400">' + esc(seller.address) + '</span>' : ''}` : '—')}
+${kv(lb.party, seller ? `${esc(seller.name)}${seller.phone ? ' · ' + esc(seller.phone) : ''}${seller.address ? '<br><span style="font-weight:400">' + esc(seller.address) + '</span>' : ''}` : '—')}
 ${product ? kv('Loại hàng', esc(product)) : ''}
 ${kv('Tài xế', driver ? `${esc(driver.name)}${driver.plate ? ' · ' + esc(driver.plate) : ''}` : '—')}
-${kv('Nhân viên cân', esc(weigher || '—'))}
+${kv(lb.weigher, esc(weigher || '—'))}
 ${kv('Quy ước', esc(p.name) + ` <span style="font-weight:400;color:#666;font-size:9pt">(${esc(presetSummary(p))})</span>`)}
 ${lot.note ? kv('Ghi chú', esc(lot.note)) : t.note && total === 1 ? kv('Ghi chú', esc(t.note)) : ''}
 </table>
@@ -95,11 +97,11 @@ ${kv('Thực nhận', fmtKg(s.net) + ' kg', 'green')}
 ${kv('Đơn giá', s.price != null ? fmtMoney(s.price) + '/kg' : '—')}
 ${s.priceDeduct > 0 ? kv('Giá sau trừ', fmtMoney(s.effectivePrice) + '/kg') : ''}
 ${kv('THÀNH TIỀN', fmtMoney(s.amount), 'big')}
-${kv('Đã thanh toán', fmtMoney(s.paid))}
-${kv('Còn lại', fmtMoney(s.remaining), s.remaining && s.remaining > 0 ? 'red' : 'green')}
+${kv(lb.kind === 'sell' ? 'Đã thu' : 'Đã thanh toán', fmtMoney(s.paid))}
+${kv(lb.kind === 'sell' ? 'Còn phải thu' : 'Còn lại', fmtMoney(s.remaining), s.remaining && s.remaining > 0 ? 'red' : 'green')}
 </table>
 ${pays.length ? `<table class="pay">${pays.map((x) => `<tr><td>${fmtDateTime(x.at)}</td><td>${x.method === 'cash' ? 'Tiền mặt' : x.method === 'transfer' ? 'Chuyển khoản' : 'Khác'}</td><td style="text-align:right;font-weight:600">${fmtMoney(x.amount)}</td><td>${esc(x.note)}</td></tr>`).join('')}</table>` : ''}
-<div class="sign"><div>Người bán<small>(ký, ghi rõ họ tên)</small><div class="line"></div></div><div>Người cân<small>${esc(weigher || '')}</small><div class="line"></div></div></div>
+<div class="sign"><div>${lb.kind === 'sell' ? 'Người nhận hàng' : 'Người bán'}<small>(ký, ghi rõ họ tên)</small><div class="line"></div></div><div>${lb.kind === 'sell' ? 'Người giao' : 'Người cân'}<small>${esc(weigher || '')}</small><div class="line"></div></div></div>
 <div class="foot">${esc(co.footer || '')}${co.footer ? ' · ' : ''}In lúc ${fmtDateTime(new Date().toISOString())}</div>
 </div>`;
 }
@@ -119,7 +121,7 @@ export async function shareReceipt(t: Truck, st: Store, lotId?: string): Promise
   const lot = lotId ? lotsOf(t).find((l) => l.id === lotId) : null;
   const who = lot?.sellerId ? st.sellers?.[lot.sellerId]?.name : '';
   if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf', dialogTitle: `Phiếu cân ${t.name}${who ? ' · ' + who : ''} ${fmtDateVN(t.date)}` });
+    await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf', dialogTitle: `${labelsFor(t).kind === 'sell' ? 'Phiếu giao hàng' : 'Phiếu cân'} ${t.name}${who ? ' · ' + who : ''} ${fmtDateVN(t.date)}` });
   } else {
     await Print.printAsync({ uri });
   }

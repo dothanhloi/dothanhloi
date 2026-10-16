@@ -150,6 +150,13 @@ Cần tài khoản Google Play Console. Hoặc build file APK để cài trực 
 9. Trả tiền: **Ghi thanh toán** trong khối của chủ hàng (có thể nhiều lần, tiền mặt/chuyển khoản). Xem tổng nợ theo từng người ở **Công nợ**.
 10. Bốc hàng xong: gạt **Đã bốc**.
 
+### E3b. Bán hàng
+1. Trang chủ bấm tab **Bán hàng** → **Tạo chuyến bán N** → chọn khách hàng (có thể nhiều khách), tài xế, loại hàng, **kho xuất**, nhân viên giao, kiểu cân.
+2. Cân như xe thu mua: bảng từng bao hoặc cân xe tải. Nhập tạp, độ theo thoả thuận với khách (chọn quy ước phù hợp), **giá bán**.
+3. **Xong xe** → **Phiếu giao hàng (PDF)** gửi khách. Khách trả tiền: **Ghi thu tiền** (nhiều lần). Khách còn nợ xem ở **Công nợ → Phải thu**.
+4. Tồn kho tự trừ phần đã bán. Báo cáo chọn **Bán hàng** hoặc **Cả hai** để thấy mua vào – bán ra và chênh lệch giá bình quân.
+5. Khách hàng quản lý ở **Cài đặt → Khách hàng**. Một đối tác vừa bán vừa mua thì đặt vai trò **Cả hai**.
+
 ### E4. Theo dõi
 - **Báo cáo**: theo ngày/tuần/tháng, theo người bán/nhân viên/tài xế/loại hàng; **Xuất Excel**.
 - **Tồn kho**: ghi xuất bán, xem tồn từng kho; ghi lệnh hedge để thấy tấn chưa hedge.

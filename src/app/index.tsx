@@ -6,7 +6,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Btn, ConfirmSheet, Empty, Field, IconBtn, Input, InputSheet, Pill, Sheet, Stats, TopBar, haptic } from '../components/ui';
 import { dayStats, truckStats } from '../lib/calc';
 import { addDays, fmtDateShort, fmtDateVN, fmtKg, fmtMoney, fmtTime, fmtWeekday, todayStr } from '../lib/format';
-import { activeDrivers, activeProducts, activeSellers, activeUsers, activeWarehouses, canSeeMoney, datesWithTrucks, dayPriceOf, driverName, selectCurrentUser, sellerNamesOf, useStore, userName } from '../lib/store';
+import { activeDrivers, activeParties, activeProducts, activeUsers, activeWarehouses, canSeeMoney, datesWithTrucks, dayPriceOf, driverName, selectCurrentUser, sellerNamesOf, useStore, userName } from '../lib/store';
+import { kindOf, labelsFor } from '../lib/labels';
+import type { TruckKind } from '../lib/types';
 import { reminders } from '../lib/reports';
 import { getSyncStatus, onSyncStatus, SyncStatus, syncNow } from '../lib/sync';
 import { C, shadow } from '../lib/theme';
@@ -19,7 +21,11 @@ export default function Home() {
   const store = useStore();
   const allTrucks = store.trucks;
   const [date, setDate] = useState(todayStr());
-  const trucks = useMemo(() => Object.values(allTrucks).filter((t) => !t.deleted && t.date === date).sort((a, b) => a.seq - b.seq), [allTrucks, date]);
+  const [kind, setKind] = useState<TruckKind>('buy');
+  const dayAll = useMemo(() => Object.values(allTrucks).filter((t) => !t.deleted && t.date === date), [allTrucks, date]);
+  const trucks = useMemo(() => dayAll.filter((t) => kindOf(t) === kind).sort((a, b) => a.seq - b.seq), [dayAll, kind]);
+  const countBuy = dayAll.filter((t) => kindOf(t) === 'buy').length;
+  const countSell = dayAll.filter((t) => kindOf(t) === 'sell').length;
   const dates = useMemo(() => datesWithTrucks({ trucks: allTrucks } as any), [allTrucks]);
   const ds = useMemo(() => dayStats(trucks), [trucks]);
   const [create, setCreate] = useState(false);
@@ -35,7 +41,7 @@ export default function Home() {
   useEffect(() => onSyncStatus(setSync), []);
 
   const isToday = date === todayStr();
-  const nextSeq = Object.values(store.trucks).filter((t) => t.date === date).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
+  const nextSeq = Object.values(store.trucks).filter((t) => t.date === date && kindOf(t) === kind).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -84,6 +90,10 @@ export default function Home() {
           <Pill text="Người bán" icon="person-outline" color="gray" small onPress={() => router.push('/settings/sellers')} />
           {rems.length ? <Pill text={`Nhắc việc (${rems.length})`} icon="notifications-outline" color="orange" small onPress={() => setShowRem((v) => !v)} /> : null}
         </ScrollView>
+        <View style={[st.kindTabs, shadow]}>
+          <Pressable onPress={() => setKind('buy')} style={[st.kindTab, kind === 'buy' && { backgroundColor: C.blue }]}><Text style={[st.kindTabText, kind === 'buy' && { color: '#fff' }]}>Thu mua{countBuy ? ` (${countBuy})` : ''}</Text></Pressable>
+          <Pressable onPress={() => setKind('sell')} style={[st.kindTab, kind === 'sell' && { backgroundColor: C.green }]}><Text style={[st.kindTabText, kind === 'sell' && { color: '#fff' }]}>Bán hàng{countSell ? ` (${countSell})` : ''}</Text></Pressable>
+        </View>
         {showRem && rems.length ? (
           <View style={[st.remBox, shadow]}>
             {rems.map((r, i) => (
@@ -94,14 +104,14 @@ export default function Home() {
             ))}
           </View>
         ) : null}
-        {money ? <Pressable onPress={() => { if (!isAdmin && !money) return; setEditPrice(true); }} style={({ pressed }) => [st.priceBar, shadow, pressed && { opacity: 0.7 }]}>
+        {money && kind === 'buy' ? <Pressable onPress={() => { if (!isAdmin && !money) return; setEditPrice(true); }} style={({ pressed }) => [st.priceBar, shadow, pressed && { opacity: 0.7 }]}>
           <Ionicons name="pricetag-outline" size={18} color={dayPrice?.price != null ? C.green : C.muted} />
           <Text style={{ flex: 1, color: C.muted, fontSize: 13 }}>Giá tham chiếu ngày {fmtDateShort(date)}{dayPrice?.note ? ` · ${dayPrice.note}` : ''}</Text>
           <Text style={[st.priceVal, dayPrice?.price == null && { color: C.blue, fontSize: 14 }]}>{dayPrice?.price != null ? fmtMoney(dayPrice.price) + '/kg' : 'Nhập giá'}</Text>
         </Pressable> : null}
 
         <Stats items={[
-          { icon: 'car-outline', color: C.blue, value: `${ds.done}/${ds.trucks}`, label: 'Xe xong' },
+          { icon: 'car-outline', color: C.blue, value: `${ds.done}/${ds.trucks}`, label: kind === 'sell' ? 'Chuyến xong' : 'Xe xong' },
           { icon: 'cube-outline', color: C.blue, value: String(ds.bags), label: 'Tổng bao' },
           { icon: 'scale-outline', color: C.green, value: fmtKg(ds.gross), unit: 'kg', label: 'Tổng thô' },
         ]} />
@@ -109,19 +119,19 @@ export default function Home() {
           <Stats items={[
             { icon: 'leaf-outline', color: C.green, value: fmtKg(ds.net), unit: 'kg', label: 'Thực nhận' },
             { icon: 'cash-outline', color: C.orange, value: fmtMoney(ds.amount), label: 'Thành tiền' },
-            { icon: 'wallet-outline', color: C.red, value: fmtMoney(ds.amount - ds.paid), label: 'Còn lại' },
+            { icon: 'wallet-outline', color: C.red, value: fmtMoney(ds.amount - ds.paid), label: kind === 'sell' ? 'Còn phải thu' : 'Còn lại' },
           ]} />
         ) : null}
 
         {trucks.length === 0 ? (
-          <Empty icon="car-outline" text={`Chưa có xe nào ngày ${fmtDateVN(date)}`} sub="Bấm “Tạo xe” để bắt đầu cân" />
+          <Empty icon={kind === 'sell' ? 'arrow-up-circle-outline' : 'car-outline'} text={`Chưa có ${kind === 'sell' ? 'chuyến bán' : 'xe'} nào ngày ${fmtDateVN(date)}`} sub={kind === 'sell' ? 'Bấm “Tạo chuyến bán” để xuất hàng cho khách' : 'Bấm “Tạo xe” để bắt đầu cân'} />
         ) : trucks.map((t) => {
           const s = truckStats(t);
           const done = t.status === 'done';
           return (
             <Pressable key={t.id} onPress={() => router.push(`/truck/${t.id}`)} style={({ pressed }) => [st.truck, shadow, pressed && { opacity: 0.7 }]}>
-              <View style={[st.seq, done && { backgroundColor: C.green }]}>
-                <Text style={st.seqSmall}>XE</Text>
+              <View style={[st.seq, done && { backgroundColor: C.green }, kind === 'sell' && !done && { backgroundColor: C.orange }]}>
+                <Text style={st.seqSmall}>{kind === 'sell' ? 'BÁN' : 'XE'}</Text>
                 <Text style={st.seqNum}>{t.seq}</Text>
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
@@ -129,13 +139,13 @@ export default function Home() {
                   <Text style={st.truckName}>{t.name}</Text>
                   {done ? <Pill text="Đã xong" color="green" small icon="checkmark-circle" /> : <Pill text="Đang cân" color="orange" small icon="time-outline" />}
                   {t.loaded ? <Pill text="Đã bốc" color="blue" small /> : null}
-                  {money && s.amount != null && s.remaining != null ? (s.remaining <= 0.5 ? <Pill text="Đã TT" color="green" small /> : s.paid > 0 ? <Pill text="TT 1 phần" color="orange" small /> : null) : null}
-                  {s.lots.length > 1 ? <Pill text={`${s.lots.length} chủ hàng`} color="gray" small /> : null}
+                  {money && s.amount != null && s.remaining != null ? (s.remaining <= 0.5 ? <Pill text={kind === 'sell' ? 'Đã thu' : 'Đã TT'} color="green" small /> : s.paid > 0 ? <Pill text={kind === 'sell' ? 'Thu 1 phần' : 'TT 1 phần'} color="orange" small /> : null) : null}
+                  {s.lots.length > 1 ? <Pill text={`${s.lots.length} ${kind === 'sell' ? 'khách' : 'chủ hàng'}`} color="gray" small /> : null}
                   {(t.weighMode || 'bags') === 'truck' ? <Pill text="Xe tải" color="gray" small /> : null}
                 </View>
                 <Text style={st.truckSub} numberOfLines={2}>
                   {sellerNamesOf(store, t) ? `${sellerNamesOf(store, t)} · ` : ''}{driverName(store, t.driverId) ? `TX ${driverName(store, t.driverId)} · ` : ''}
-                  Cân: {userName(store, t.weigherId) || '—'} · Tạo {fmtTime(t.createdAt)}{done ? ` · Xong ${fmtTime(t.doneAt)}` : ''}
+                  {kind === 'sell' ? 'Giao' : 'Cân'}: {userName(store, t.weigherId) || '—'} · Tạo {fmtTime(t.createdAt)}{done ? ` · Xong ${fmtTime(t.doneAt)}` : ''}
                 </Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
@@ -147,13 +157,13 @@ export default function Home() {
         })}
       </ScrollView>
 
-      <Pressable onPress={() => setCreate(true)} style={({ pressed }) => [st.fab, { bottom: insets.bottom + 18 }, pressed && { opacity: 0.85 }]}>
+      <Pressable onPress={() => setCreate(true)} style={({ pressed }) => [st.fab, { bottom: insets.bottom + 18 }, kind === 'sell' && { backgroundColor: C.green, shadowColor: C.green }, pressed && { opacity: 0.85 }]}>
         <Ionicons name="add" size={22} color="#fff" />
-        <Text style={st.fabText}>Tạo xe {nextSeq}</Text>
+        <Text style={st.fabText}>{kind === 'sell' ? `Tạo chuyến bán ${nextSeq}` : `Tạo xe ${nextSeq}`}</Text>
       </Pressable>
 
-      <Sheet visible={create} onClose={() => setCreate(false)} title={`Tạo Xe ${nextSeq} · ${fmtDateVN(date)}`} desc="Số xe tự tăng theo thứ tự trong ngày. Giờ tạo và người tạo được lưu lại.">
-        {create ? <CreateTruckForm date={date} onClose={() => setCreate(false)} onCreated={(id) => { setCreate(false); router.push(`/truck/${id}`); }} /> : null}
+      <Sheet visible={create} onClose={() => setCreate(false)} title={`${kind === 'sell' ? 'Tạo chuyến bán' : 'Tạo Xe'} ${nextSeq} · ${fmtDateVN(date)}`} desc={kind === 'sell' ? 'Xuất hàng từ kho bán cho khách: cân, trừ tạp độ theo thoả thuận, giá bán, thu tiền.' : 'Số xe tự tăng theo thứ tự trong ngày. Giờ tạo và người tạo được lưu lại.'}>
+        {create ? <CreateTruckForm date={date} kind={kind} onClose={() => setCreate(false)} onCreated={(id) => { setCreate(false); router.push(`/truck/${id}`); }} /> : null}
       </Sheet>
       <InputSheet visible={editPrice} onClose={() => setEditPrice(false)} title={`Giá tham chiếu ${fmtDateVN(date)}`} label="Giá (đ/kg)" unit="đ/kg" keyboard="number"
         hint="Xe tạo mới trong ngày sẽ tự lấy giá này, vẫn sửa riêng từng xe được. Xe đã tạo không đổi."
@@ -164,11 +174,12 @@ export default function Home() {
   );
 }
 
-function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: () => void; onCreated: (id: string) => void }) {
+function CreateTruckForm({ date, kind, onClose, onCreated }: { date: string; kind: TruckKind; onClose: () => void; onCreated: (id: string) => void }) {
   const store = useStore();
   const user = useStore(selectCurrentUser);
+  const lb = labelsFor(kind);
   const drivers = activeDrivers(store);
-  const sellers = activeSellers(store);
+  const sellers = activeParties(store, kind);
   const users = activeUsers(store);
   const [driverId, setDriverId] = useState<string | null>(null);
   const [sellerIds, setSellerIds] = useState<string[]>([]);
@@ -182,14 +193,14 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
   const [weigherId, setWeigherId] = useState<string | null>(user?.id || null);
   const [newDriver, setNewDriver] = useState('');
   const [note, setNote] = useState('');
-  const seq = Object.values(store.trucks).filter((t) => t.date === date).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
+  const seq = Object.values(store.trucks).filter((t) => t.date === date && kindOf(t) === kind).reduce((m, t) => Math.max(m, t.seq || 0), 0) + 1;
 
   function create() {
     let dId = driverId;
     if (!dId && newDriver.trim()) dId = store.addDriver({ name: newDriver }).id;
     const ids = [...sellerIds];
-    if (newSeller.trim()) ids.push(store.addSeller({ name: newSeller }).id);
-    const t = store.createTruck({ date, driverId: dId, sellerIds: ids, weigherId, note, productId, warehouseId, weighMode: mode });
+    if (newSeller.trim()) ids.push(store.addSeller({ name: newSeller, kind: kind === 'sell' ? 'buyer' : 'seller' }).id);
+    const t = store.createTruck({ date, kind, driverId: dId, sellerIds: ids, weigherId, note, productId, warehouseId, weighMode: mode });
     haptic('success');
     toast(`Đã tạo ${t.name} lúc ${fmtTime(t.createdAt)}`, 'ok');
     onCreated(t.id);
@@ -197,14 +208,14 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
 
   return (
     <>
-      <Field label={`Chủ hàng (mua của ai)${sellerIds.length > 1 ? ` · ${sellerIds.length} chủ hàng` : ''}`} hint="Chọn nhiều người nếu xe chở hàng của nhiều chủ. Có thể thêm bớt sau trên màn hình xe.">
+      <Field label={kind === 'sell' ? `Khách hàng (bán cho ai)${sellerIds.length > 1 ? ` · ${sellerIds.length} khách` : ''}` : `Chủ hàng (mua của ai)${sellerIds.length > 1 ? ` · ${sellerIds.length} chủ hàng` : ''}`} hint={kind === 'sell' ? 'Chọn nhiều khách nếu một chuyến giao cho nhiều người.' : 'Chọn nhiều người nếu xe chở hàng của nhiều chủ. Có thể thêm bớt sau trên màn hình xe.'}>
         {sellers.length > 8 ? <Input value={sellerQ} onChangeText={setSellerQ} placeholder="Tìm người bán" style={{ marginBottom: 8, paddingVertical: 8 }} /> : null}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {sellers.filter((x) => !sellerQ.trim() || x.name.toLowerCase().includes(sellerQ.trim().toLowerCase())).slice(0, 30).map((d) => (
             <Pill key={d.id} text={d.name} color={sellerIds.includes(d.id) ? 'blue' : 'gray'} onPress={() => setSellerIds(sellerIds.includes(d.id) ? sellerIds.filter((x) => x !== d.id) : [...sellerIds, d.id])} />
           ))}
         </View>
-        <Input value={newSeller} onChangeText={setNewSeller} placeholder="Thêm tên người bán mới (nếu chưa có)" style={{ marginTop: 8 }} />
+        <Input value={newSeller} onChangeText={setNewSeller} placeholder={`Thêm tên ${lb.party.toLowerCase()} mới (nếu chưa có)`} style={{ marginTop: 8 }} />
       </Field>
       <Field label="Tài xế">
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -215,7 +226,7 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
         </View>
         {!driverId ? <Input value={newDriver} onChangeText={setNewDriver} placeholder="Hoặc nhập tên tài xế mới" style={{ marginTop: 8 }} /> : null}
       </Field>
-      <Field label="Nhân viên đi cân">
+      <Field label={lb.weigher}>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {users.map((u) => <Pill key={u.id} text={u.name} color={weigherId === u.id ? 'blue' : 'gray'} onPress={() => setWeigherId(u.id)} />)}
         </View>
@@ -228,7 +239,7 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
         </Field>
       ) : null}
       {warehouses.length ? (
-        <Field label="Nhập kho">
+        <Field label={lb.warehouse}>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {warehouses.map((w) => <Pill key={w.id} text={w.name} color={warehouseId === w.id ? 'blue' : 'gray'} small onPress={() => setWarehouseId(warehouseId === w.id ? null : w.id)} />)}
           </View>
@@ -243,7 +254,7 @@ function CreateTruckForm({ date, onClose, onCreated }: { date: string; onClose: 
       <Field label="Ghi chú (tuỳ chọn)"><Input value={note} onChangeText={setNote} placeholder="VD: hàng của anh Ba, kho 2" /></Field>
       <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
         <Btn title="Huỷ" kind="ghost" onPress={onClose} style={{ flex: 1 }} />
-        <Btn title={`Tạo Xe ${seq}`} icon="add-circle" onPress={create} style={{ flex: 2 }} />
+        <Btn title={kind === 'sell' ? `Tạo chuyến bán ${seq}` : `Tạo Xe ${seq}`} kind={kind === 'sell' ? 'success' : 'primary'} icon="add-circle" onPress={create} style={{ flex: 2 }} />
       </View>
     </>
   );
@@ -267,6 +278,9 @@ const st = StyleSheet.create({
   truckSub: { color: C.muted, fontSize: 12.5, marginTop: 3, lineHeight: 17 },
   kg: { fontWeight: '800', fontSize: 17, color: C.text, fontVariant: ['tabular-nums'] },
   kgL: { fontSize: 11, color: C.muted },
+  kindTabs: { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 12, padding: 4, marginBottom: 10, gap: 4 },
+  kindTab: { flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: 'center' },
+  kindTabText: { fontWeight: '700', color: '#555', fontSize: 14 },
   remBox: { backgroundColor: '#fff', borderRadius: 12, paddingVertical: 4, paddingHorizontal: 12, marginBottom: 10 },
   remRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   priceBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10 },

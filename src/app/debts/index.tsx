@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,17 +7,19 @@ import { Avatar, Empty, Pill, Stats, TopBar } from '../../components/ui';
 import { lotStats, lotsOf } from '../../lib/calc';
 import { fmtKg, fmtMoney } from '../../lib/format';
 import { canSeeMoney, useStore } from '../../lib/store';
+import { kindOf } from '../../lib/labels';
+import type { TruckKind } from '../../lib/types';
 import { C, shadow } from '../../lib/theme';
 
 export interface SellerDebt { sellerId: string; name: string; trucks: number; open: number; kg: number; amount: number; paid: number; remaining: number }
 
-export function computeDebts(store: Pick<ReturnType<typeof useStore.getState>, 'trucks' | 'sellers'>): SellerDebt[] {
+export function computeDebts(store: Pick<ReturnType<typeof useStore.getState>, 'trucks' | 'sellers'>, kind: TruckKind = 'buy'): SellerDebt[] {
   const m: Record<string, SellerDebt> = {};
   for (const t of Object.values(store.trucks)) {
-    if (t.deleted) continue;
+    if (t.deleted || kindOf(t) !== kind) continue;
     for (const lot of lotsOf(t)) {
       const key = lot.sellerId || '';
-      const name = key ? store.sellers?.[key]?.name || 'Người bán đã xoá' : 'Chưa gán người bán';
+      const name = key ? store.sellers?.[key]?.name || 'Đối tác đã xoá' : (kind === 'sell' ? 'Chưa gán khách hàng' : 'Chưa gán người bán');
       const s = lotStats(t, lot);
       const d = m[key] || (m[key] = { sellerId: key, name, trucks: 0, open: 0, kg: 0, amount: 0, paid: 0, remaining: 0 });
       d.trucks++;
@@ -35,12 +37,14 @@ export function computeDebts(store: Pick<ReturnType<typeof useStore.getState>, '
 export default function Debts() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ kind?: string }>();
   const store = useStore();
   const money = canSeeMoney(store);
   const trucks = store.trucks;
   const sellers = store.sellers;
   const [onlyOpen, setOnlyOpen] = useState(true);
-  const debts = useMemo(() => computeDebts({ trucks, sellers } as any), [trucks, sellers]);
+  const [kind, setKind] = useState<TruckKind>(params.kind === 'sell' ? 'sell' : 'buy');
+  const debts = useMemo(() => computeDebts({ trucks, sellers } as any, kind), [trucks, sellers, kind]);
   const list = onlyOpen ? debts.filter((d) => d.remaining > 0.5) : debts;
   const total = debts.reduce((a, d) => ({ amount: a.amount + d.amount, paid: a.paid + d.paid, remaining: a.remaining + d.remaining }), { amount: 0, paid: 0, remaining: 0 });
 
@@ -56,25 +60,29 @@ export default function Debts() {
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <TopBar title="Công nợ" onBack={() => router.back()} />
       <ScrollView contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: insets.bottom + 30 }}>
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+          <Pill text="Phải trả (mua)" color={kind === 'buy' ? 'blue' : 'gray'} icon="arrow-up-circle-outline" onPress={() => setKind('buy')} />
+          <Pill text="Phải thu (bán)" color={kind === 'sell' ? 'green' : 'gray'} icon="arrow-down-circle-outline" onPress={() => setKind('sell')} />
+        </View>
         <Stats items={[
-          { icon: 'cash-outline', color: C.blue, value: fmtMoney(total.amount), label: 'Tổng mua' },
-          { icon: 'checkmark-circle-outline', color: C.green, value: fmtMoney(total.paid), label: 'Đã trả' },
-          { icon: 'alert-circle-outline', color: C.red, value: fmtMoney(total.remaining), label: 'Còn nợ' },
+          { icon: 'cash-outline', color: C.blue, value: fmtMoney(total.amount), label: kind === 'sell' ? 'Tổng bán' : 'Tổng mua' },
+          { icon: 'checkmark-circle-outline', color: C.green, value: fmtMoney(total.paid), label: kind === 'sell' ? 'Đã thu' : 'Đã trả' },
+          { icon: 'alert-circle-outline', color: C.red, value: fmtMoney(total.remaining), label: kind === 'sell' ? 'Còn phải thu' : 'Còn nợ' },
         ]} />
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
           <Pill text="Còn nợ" color={onlyOpen ? 'blue' : 'gray'} small onPress={() => setOnlyOpen(true)} />
           <Pill text="Tất cả" color={!onlyOpen ? 'blue' : 'gray'} small onPress={() => setOnlyOpen(false)} />
         </View>
-        {list.length === 0 ? <Empty icon="wallet-outline" text={onlyOpen ? 'Không còn ai nợ' : 'Chưa có giao dịch'} /> : list.map((d) => (
-          <Pressable key={d.sellerId || 'none'} onPress={() => router.push(`/debts/${d.sellerId || 'none'}`)} style={({ pressed }) => [st.row, shadow, pressed && { opacity: 0.7 }]}>
+        {list.length === 0 ? <Empty icon="wallet-outline" text={onlyOpen ? (kind === 'sell' ? 'Không ai còn nợ mình' : 'Không còn nợ ai') : 'Chưa có giao dịch'} /> : list.map((d) => (
+          <Pressable key={d.sellerId || 'none'} onPress={() => router.push(`/debts/${d.sellerId || 'none'}?kind=${kind}`)} style={({ pressed }) => [st.row, shadow, pressed && { opacity: 0.7 }]}>
             <Avatar name={d.name} bg={d.remaining > 0.5 ? C.redSoft : C.greenSoft} fg={d.remaining > 0.5 ? C.red : C.green} />
             <View style={{ flex: 1 }}>
               <Text style={st.name}>{d.name}</Text>
-              <Text style={st.sub}>{d.trucks} xe · {fmtKg(d.kg)} kg · đã trả {fmtMoney(d.paid)}{d.open ? ` · ${d.open} xe chưa xong tiền` : ''}</Text>
+              <Text style={st.sub}>{d.trucks} xe · {fmtKg(d.kg)} kg · {kind === 'sell' ? 'đã thu' : 'đã trả'} {fmtMoney(d.paid)}{d.open ? ` · ${d.open} xe chưa xong tiền` : ''}</Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={[st.amt, { color: d.remaining > 0.5 ? C.red : C.green }]}>{fmtMoney(d.remaining)}</Text>
-              <Text style={st.sub}>còn lại</Text>
+              <Text style={st.sub}>{kind === 'sell' ? 'còn phải thu' : 'còn lại'}</Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color={C.muted} />
           </Pressable>
